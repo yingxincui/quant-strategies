@@ -141,8 +141,6 @@ class BacktestEngine:
         """使用Plotly绘制交互式回测结果"""
         # 获取策略数据
         data = self.strategy.data
-        fast_ma = self.strategy.fast_ma
-        slow_ma = self.strategy.slow_ma
         trailing_stop = self.strategy.trailing_stop
         
         # 将数据转换为numpy数组，处理日期时间
@@ -152,8 +150,6 @@ class BacktestEngine:
         lows = np.array(data.low.array)
         closes = np.array(data.close.array)
         volumes = np.array(data.volume.array)
-        fast_ma_vals = np.array(fast_ma.array)
-        slow_ma_vals = np.array(slow_ma.array)
         trailing_stop_vals = np.array(trailing_stop.trailing_stop.array)
         
         # 创建DataFrame以便处理数据
@@ -164,8 +160,6 @@ class BacktestEngine:
             'low': lows,
             'close': closes,
             'volume': volumes,
-            'fast_ma': fast_ma_vals,
-            'slow_ma': slow_ma_vals,
             'trailing_stop': trailing_stop_vals
         })
         
@@ -190,28 +184,16 @@ class BacktestEngine:
             decreasing_line_color='#00ff00',  # 下跌为绿色
         ), row=1, col=1)
         
-        # 添加移动平均线
-        fig.add_trace(go.Scatter(
-            x=df['date'],
-            y=df['fast_ma'],
-            name=f'快线(MA{self.strategy.p.fast_period})',
-            line=dict(color='#2ecc71')
-        ), row=1, col=1)
-        
-        fig.add_trace(go.Scatter(
-            x=df['date'],
-            y=df['slow_ma'],
-            name=f'慢线(MA{self.strategy.p.slow_period})',
-            line=dict(color='#e74c3c')
-        ), row=1, col=1)
-        
         # 添加追踪止损线
-        fig.add_trace(go.Scatter(
-            x=df['date'],
-            y=df['trailing_stop'],
-            name='追踪止损',
-            line=dict(color='#f1c40f', dash='dash')
-        ), row=1, col=1)
+        # 过滤掉追踪止损为0的点
+        valid_stops = df[df['trailing_stop'] > 0].copy()
+        if not valid_stops.empty:
+            fig.add_trace(go.Scatter(
+                x=valid_stops['date'],
+                y=valid_stops['trailing_stop'],
+                name='追踪止损',
+                line=dict(color='#f1c40f', dash='dash')
+            ), row=1, col=1)
         
         # 添加买卖点标记
         if hasattr(self, 'trades_df') and not self.trades_df.empty:
@@ -387,18 +369,17 @@ class BacktestEngine:
             txn_analysis = strategy.analyzers.txn.get_analysis()
             
             # 临时存储开仓信息
-            open_trades = {}
+            position = {
+                'size': 0,
+                'value': 0,
+                'avg_price': 0
+            }
+            running_pnl = 0  # 用于累计盈亏
             
-            for date, txns in txn_analysis.items():
+            for date, txns in sorted(txn_analysis.items()):  # 确保按日期排序
                 for txn in txns:
                     # 确保txn是一个列表或元组
-                    if not isinstance(txn, (list, tuple)):
-                        logger.warning(f"跳过无效的交易记录: {txn}")
-                        continue
-                        
-                    # 确保有足够的元素
-                    if len(txn) < 2:
-                        logger.warning(f"交易记录元素不足: {txn}")
+                    if not isinstance(txn, (list, tuple)) or len(txn) < 2:
                         continue
                     
                     size = txn[0]
@@ -410,34 +391,84 @@ class BacktestEngine:
                     else:
                         trade_date = bt.num2date(date)
                     
-                    if size > 0:  # 开仓
-                        open_trades[abs(size)] = {
-                            'entry_time': trade_date,
-                            'entry_price': price,
-                            'size': abs(size)
-                        }
-                    else:  # 平仓
+                    if size > 0:  # 买入
+                        # 更新持仓信息
+                        position['size'] += size
+                        position['value'] += price * size
+                        position['avg_price'] = position['value'] / position['size'] if position['size'] > 0 else 0
+                        
+                        # 获取交易原因
+                        trade_info = None
+                        
+                        # 直接使用策略当前的trade_reason
+                        for order in strategy._orders:
+                            if (order.executed.size == size and 
+                                abs(order.executed.price - price) < 0.000001 and 
+                                order.isbuy()):
+                                trade_info = order.info.get('reason') if hasattr(order, 'info') else None
+                                break
+                        
+                        if not trade_info:
+                            logger.debug("未找到交易原因，使用默认值")
+                            trade_info = '未知原因'
+                        
+                        trades.append({
+                            'time': trade_date,
+                            'direction': 'Long',
+                            'price': price,
+                            'size': size,
+                            'avg_price': position['avg_price'],
+                            'pnl': 0,
+                            'return': 0,
+                            'reason': trade_info
+                        })
+                    else:  # 卖出
                         size = abs(size)
-                        if size in open_trades:
-                            entry = open_trades[size]
-                            pnl = (price - entry['entry_price']) * size
-                            trades.append({
-                                'entry_time': entry['entry_time'],
-                                'exit_time': trade_date,
-                                'entry_price': entry['entry_price'],
-                                'exit_price': price,
-                                'direction': 'Long',
-                                'size': size,
-                                'pnl': pnl,
-                                'return': (price - entry['entry_price']) / entry['entry_price']
-                            })
-                            del open_trades[size]
+                        # 计算这次卖出的盈亏
+                        pnl = (price - position['avg_price']) * size
+                        ret = (price - position['avg_price']) / position['avg_price'] if position['avg_price'] > 0 else 0
+                        running_pnl += pnl
+                        
+                        # 获取交易原因
+                        trade_info = None
+                        
+                        # 直接使用策略当前的trade_reason
+                        for order in strategy._orders:
+                            if (order.executed.size == -size and 
+                                abs(order.executed.price - price) < 0.000001 and 
+                                not order.isbuy()):
+                                trade_info = order.info.get('reason') if hasattr(order, 'info') else None
+                                break
+                        
+                        if not trade_info:
+                            logger.debug("未找到交易原因，使用默认值")
+                            trade_info = '未知原因'
+                        
+                        trades.append({
+                            'time': trade_date,
+                            'direction': 'Short',
+                            'price': price,
+                            'size': size,
+                            'avg_price': position['avg_price'],
+                            'pnl': pnl,
+                            'return': ret,
+                            'reason': trade_info
+                        })
+                        
+                        # 更新持仓
+                        position['size'] -= size
+                        if position['size'] > 0:
+                            position['value'] = position['avg_price'] * position['size']
+                        else:
+                            position['size'] = 0
+                            position['value'] = 0
+                            position['avg_price'] = 0
             
             # 按时间排序
-            trades.sort(key=lambda x: x['entry_time'])
+            trades.sort(key=lambda x: x['time'])
             
         except Exception as e:
-            logger.warning(f"处理交易记录时出现错误: {str(e)}")
+            logger.warning(f"处理交易记录时出错: {str(e)}")
             logger.warning(f"交易记录内容: {txn_analysis}")
             
         analysis['trades'] = trades

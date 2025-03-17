@@ -74,8 +74,13 @@ def main():
         
         # 数据源设置
         st.subheader("数据源配置")
-        tushare_token = st.text_input("Tushare Token（可选，如不填则使用akshare）", type="password")
-        symbol = st.text_input("ETF代码", value="510300.SH", help="支持：A股(000001.SZ)、ETF(510300.SH)、港股(00700.HK)")
+        if strategy_name == "市场情绪策略":
+            tushare_token = st.text_input("Tushare Token（必填）", type="password", help="市场情绪策略需要使用Tushare数据源")
+            if not tushare_token:
+                st.error("市场情绪策略必须提供Tushare Token")
+        else:
+            tushare_token = st.text_input("Tushare Token（可选，如不填则使用akshare）", type="password")
+        symbol = st.text_input("ETF代码", value="510050.SH", help="支持：A股(000001.SZ)、ETF(510300.SH)、港股(00700.HK)")
         
         # 移动平均线参数（仅在选择双均线策略时显示）
         if strategy_name == "双均线策略":
@@ -108,6 +113,11 @@ def main():
         
     # 主界面
     if st.button("开始回测", type="primary"):
+        # 检查市场情绪策略的token
+        if strategy_name == "市场情绪策略" and not tushare_token:
+            st.error("市场情绪策略必须提供Tushare Token")
+            return
+            
         with st.spinner("正在进行回测..."):
             try:
                 # 下载数据
@@ -142,6 +152,10 @@ def main():
                         'slow_period': slow_period,
                     })
                 
+                # 如果是市场情绪策略，添加tushare token
+                if strategy_name == "市场情绪策略":
+                    os.environ['TUSHARE_TOKEN'] = tushare_token
+                
                 # 创建回测引擎
                 engine = BacktestEngine(
                     strategy_class,
@@ -157,11 +171,19 @@ def main():
                 # 显示回测结果
                 st.header("回测结果")
                 
-                # 基础指标
                 # 显示交易统计
-                total_pnl = sum(float(x['pnl']) for x in results['trades'])
-                win_trades = sum(1 for x in results['trades'] if float(x['pnl']) > 0)
-                total_trades = len(results['trades'])
+                trades = results.get('trades', [])
+                trades_df = pd.DataFrame(trades)
+                
+                # 计算交易统计
+                if not trades_df.empty:
+                    total_pnl = sum(float(trade.get('pnl', 0)) for trade in trades)
+                    win_trades = len([t for t in trades if float(t.get('pnl', 0)) > 0])
+                    total_trades = len(trades)
+                else:
+                    total_pnl = 0
+                    win_trades = 0
+                    total_trades = 0
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -181,30 +203,42 @@ def main():
                 
                 # 显示交易记录
                 st.subheader("交易记录")
-                if len(results['trades']) > 0:
-                    trades_df = pd.DataFrame(results['trades'])
-                    # 格式化数据
-                    trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time']).dt.strftime('%Y-%m-%d %H:%M')
-                    trades_df['exit_time'] = pd.to_datetime(trades_df['exit_time']).dt.strftime('%Y-%m-%d %H:%M')
-                    trades_df['entry_price'] = trades_df['entry_price'].map('{:.2f}'.format)
-                    trades_df['exit_price'] = trades_df['exit_price'].map('{:.2f}'.format)
-                    trades_df['return'] = trades_df['return'].map('{:.2%}'.format)
-                    trades_df['pnl'] = trades_df['pnl'].map('{:.2f}'.format)
-                    trades_df['size'] = trades_df['size'].astype(int)
-                    
-                    # 删除方向列
-                    trades_df = trades_df.drop('direction', axis=1)
-                    
-                    # 重命名列
-                    trades_df.columns = ['开仓时间', '平仓时间', '开仓价格', '平仓价格', '数量', '盈亏', '收益率']
-                    
-                    # 显示交易记录表格
-                    st.dataframe(
-                        trades_df,
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
+                if total_trades > 0:
+                    try:
+                        # 格式化数据
+                        trades_df['time'] = pd.to_datetime(trades_df['time']).dt.strftime('%Y-%m-%d')
+                        trades_df['price'] = trades_df['price'].map('{:.3f}'.format)
+                        trades_df['avg_price'] = trades_df['avg_price'].map('{:.4f}'.format)
+                        trades_df['return'] = trades_df['return'].map('{:.2%}'.format)
+                        trades_df['pnl'] = trades_df['pnl'].map('{:.2f}'.format)
+                        trades_df['size'] = trades_df['size'].astype(int)
+                        
+                        # 转换方向
+                        trades_df['direction'] = trades_df['direction'].map({'Long': '买入', 'Short': '卖出'})
+                        
+                        # 重命名列并选择要显示的列
+                        display_df = trades_df[['time', 'direction', 'price', 'avg_price', 'size', 'pnl', 'return', 'reason']]
+                        display_df = display_df.rename(columns={
+                            'time': '交易时间',
+                            'direction': '方向',
+                            'price': '成交价',
+                            'avg_price': '持仓均价',
+                            'size': '数量',
+                            'pnl': '盈亏',
+                            'return': '收益率',
+                            'reason': '交易原因'
+                        })
+                        
+                        # 显示交易记录表格
+                        st.dataframe(
+                            display_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                        
+                    except Exception as e:
+                        logger.error(f"格式化交易记录时出错: {str(e)}")
+                        st.error("显示交易记录时出错，请检查数据格式")
                 else:
                     st.info("回测期间没有产生交易")
                     

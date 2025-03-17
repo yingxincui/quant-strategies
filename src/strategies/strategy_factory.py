@@ -1,10 +1,12 @@
 from typing import Type, Dict
 import backtrader as bt
 from .dual_ma_strategy import DualMAStrategy
+from .market_sentiment_strategy import MarketSentimentStrategy
 
 class StrategyFactory:
     _strategies: Dict[str, Type[bt.Strategy]] = {
         "双均线策略": DualMAStrategy,
+        "市场情绪策略": MarketSentimentStrategy,
     }
 
     @classmethod

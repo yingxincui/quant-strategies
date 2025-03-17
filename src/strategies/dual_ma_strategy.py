@@ -34,6 +34,8 @@ class DualMAStrategy(bt.Strategy):
         # 用于跟踪订单和持仓
         self.order = None
         self.entry_price = None  # 记录入场价格
+        self.trade_reason = None  # 记录交易原因
+        self._orders = []  # 记录所有订单
         
         # T+1交易限制
         self.buy_dates = set()  # 记录买入日期
@@ -90,6 +92,9 @@ class DualMAStrategy(bt.Strategy):
         return shares if shares >= 100 else 0
 
     def next(self):
+        # 重置交易原因（在每个新的交易周期开始时）
+        self.trade_reason = None
+        
         # 如果有未完成的订单，不执行新的交易
         if self.order:
             return
@@ -102,6 +107,7 @@ class DualMAStrategy(bt.Strategy):
         # 如果回撤超过限制，不开新仓
         if drawdown > self.p.max_drawdown:
             if self.position:
+                self.trade_reason = f"触发最大回撤限制 ({drawdown:.2%})"
                 self.close()
                 logger.info(f"触发最大回撤限制 - 当前回撤: {drawdown:.2%}, 限制: {self.p.max_drawdown:.2%}")
             return
@@ -121,6 +127,7 @@ class DualMAStrategy(bt.Strategy):
                 shares = self.calculate_trade_size(current_price)
                 
                 if shares >= 100:  # 确保至少有100股
+                    self.trade_reason = f"快线上穿慢线 ({self.p.fast_period}日均线上穿{self.p.slow_period}日均线)"
                     self.order = self.buy(size=shares)
                     if self.order:
                         # 记录买入日期和价格
@@ -139,12 +146,14 @@ class DualMAStrategy(bt.Strategy):
             logger.info(f"持仓检查 - 今天日期: {current_date}, 当前价格: {current_price:.2f}, 止损价: {stop_price:.2f}, 最高价: {self.trailing_stop.max_price:.2f}")
             
             if self.crossover < 0:  # 死叉，卖出信号
+                self.trade_reason = f"快线下穿慢线 ({self.p.fast_period}日均线下穿{self.p.slow_period}日均线)"
                 self.order = self.close()
                 if self.order:
                     logger.info(f"卖出信号 - 价格: {current_price:.2f}")
             
             # 追踪止损检查
             elif current_price < stop_price:
+                self.trade_reason = f"触发追踪止损 (止损价: {stop_price:.2f})"
                 self.order = self.close()
                 if self.order:
                     logger.info(f"追踪止损触发 - 当前价格: {current_price:.2f}, 止损价: {stop_price:.2f}, 最高价: {self.trailing_stop.max_price:.2f}")
@@ -157,17 +166,23 @@ class DualMAStrategy(bt.Strategy):
             if order.isbuy():
                 # 买入订单执行后立即重置追踪止损，使用实际成交价
                 self.trailing_stop.reset(price=order.executed.price)
+                order.info = {'reason': self.trade_reason}  # 记录交易原因
+                self._orders.append(order)  # 添加到订单列表
                 logger.info(
                     f'买入执行 - 价格: {order.executed.price:.2f}, '
                     f'数量: {order.executed.size}, '
+                    f'原因: {self.trade_reason}'
                 )
             else:
                 # 重置入场价格并停止追踪
                 self.entry_price = None
                 self.trailing_stop.stop_tracking()
+                order.info = {'reason': self.trade_reason}  # 记录交易原因
+                self._orders.append(order)  # 添加到订单列表
                 logger.info(
                     f'卖出执行 - 价格: {order.executed.price:.2f}, '
                     f'数量: {order.executed.size}, '
+                    f'原因: {self.trade_reason}'
                 )
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             logger.warning(f'订单失败 - 状态: {order.getstatusname()}')
