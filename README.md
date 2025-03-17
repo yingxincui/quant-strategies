@@ -13,6 +13,10 @@
 - 💰 精确的交易费用计算（佣金等）
 - 📝 完整的交易日志
 
+## 一些截图
+![image](https://github.com/user-attachments/assets/27e51998-274b-495b-b3bd-cc18c36faf69)
+![image](https://github.com/user-attachments/assets/1486396a-a7e1-404c-9e7d-204bf3da9cf4)
+
 ## 内置策略
 
 ### 双均线策略
