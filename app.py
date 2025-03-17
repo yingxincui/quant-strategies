@@ -178,11 +178,10 @@ def main():
                 # 计算交易统计
                 if not trades_df.empty:
                     total_pnl = sum(float(trade.get('pnl', 0)) for trade in trades)
-                    win_trades = len([t for t in trades if float(t.get('pnl', 0)) > 0])
+                    # 不再自己计算胜率，而是使用引擎返回的结果
                     total_trades = len(trades)
                 else:
                     total_pnl = 0
-                    win_trades = 0
                     total_trades = 0
                 
                 col1, col2, col3 = st.columns(3)
@@ -191,7 +190,8 @@ def main():
                 with col2:
                     st.metric("总交易次数", total_trades)
                 with col3:
-                    st.metric("胜率", f"{win_trades/total_trades:.2%}" if total_trades > 0 else "0%")
+                    # 使用引擎计算的胜率，与后台日志保持一致
+                    st.metric("胜率", f"{results['win_rate']:.2%}" if total_trades > 0 else "0%")
 
                 col1, col2, col3 = st.columns(3)
                 with col1:

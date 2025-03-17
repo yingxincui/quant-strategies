@@ -150,7 +150,13 @@ class BacktestEngine:
         lows = np.array(data.low.array)
         closes = np.array(data.close.array)
         volumes = np.array(data.volume.array)
-        trailing_stop_vals = np.array(trailing_stop.trailing_stop.array)
+        
+        # 检查trailing_stop是否为None
+        if trailing_stop is not None:
+            trailing_stop_vals = np.array(trailing_stop.trailing_stop.array)
+        else:
+            # 如果trailing_stop为None，创建一个全为0的数组
+            trailing_stop_vals = np.zeros_like(closes)
         
         # 创建DataFrame以便处理数据
         df = pd.DataFrame({

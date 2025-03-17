@@ -30,12 +30,20 @@ cd ETF-Strategies
 
 2. 安装依赖，使用miniconda：
 ```bash
+# pip设置源
+pip config set global.index-url https://mirrors.aliyun.com/pypi/simple
+pip config set install.trusted-host mirrors.aliyun.com
 conda create -n etf python=3.10
 conda activate etf
 pip install -r requirements.txt
 ```
 
-3. 运行系统：
+3. 安装TA-lib：
+```bash
+conda install -c conda-forge ta-lib
+```
+
+4. 运行系统：
 ```bash
 streamlit run app.py
 ```
@@ -63,6 +71,7 @@ ETF-Strategies/
 │   ├── data/             # 数据加载模块
 │   ├── strategies/       # 交易策略模块
 │   ├── indicators/       # 技术指标模块
+│   ├── signals/          # 信号数据模块
 │   └── utils/           # 工具函数模块
 └── logs/                # 日志文件目录
 ```
@@ -125,6 +134,32 @@ if strategy_name == "双均线策略":
 ## 风险提示
 
 本系统仅供学习和研究使用，不构成任何投资建议。使用本系统进行实盘交易需要自行承担风险。
+
+## TODO List
+
+- [ ] 优化市场情绪指标
+  - 增强对极端情绪的识别能力，尤其是2020年情绪底部
+  - 引入更多维度的情绪数据源
+  - 优化情绪指标的计算方法
+
+- [ ] 增强市场情绪策略
+  - 优化情绪阈值的动态调整机制
+  - 完善仓位管理策略
+  - 增加更多技术指标的配合
+  - 优化止盈止损机制
+  - 提高策略的风险调整后收益率
+
+- [ ] 引入强化学习框架
+  - 构建适合ETF交易的强化学习环境
+  - 设计合理的奖励函数
+  - 训练智能体辅助开仓决策
+  - 实现在线学习和模型更新
+
+- [ ] 开发ETF市场风格轮换策略
+  - 构建ETF风格分类体系
+  - 开发风格切换识别算法
+  - 实现多ETF组合管理
+  - 优化轮换交易时机
 
 ## 贡献指南
 
