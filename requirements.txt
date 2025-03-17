@@ -1,0 +1,11 @@
+streamlit
+backtrader
+pandas
+numpy
+matplotlib
+loguru
+akshare
+tushare
+hyperopt
+plotly
+bokeh 
