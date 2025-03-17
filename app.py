@@ -75,7 +75,7 @@ def main():
         # 数据源设置
         st.subheader("数据源配置")
         if strategy_name == "市场情绪策略":
-            tushare_token = st.text_input("Tushare Token（必填）", type="password", help="市场情绪策略需要使用Tushare数据源")
+            tushare_token = st.text_input("Tushare Token（必填）", value="", type="password", help="市场情绪策略需要使用Tushare数据源")
             if not tushare_token:
                 st.error("市场情绪策略必须提供Tushare Token")
         else:
@@ -172,17 +172,11 @@ def main():
                 st.header("回测结果")
                 
                 # 显示交易统计
-                trades = results.get('trades', [])
-                trades_df = pd.DataFrame(trades)
+                trades = results.get('trades', pd.DataFrame())  # 获取交易记录DataFrame
                 
-                # 计算交易统计
-                if not trades_df.empty:
-                    total_pnl = sum(float(trade.get('pnl', 0)) for trade in trades)
-                    # 不再自己计算胜率，而是使用引擎返回的结果
-                    total_trades = len(trades)
-                else:
-                    total_pnl = 0
-                    total_trades = 0
+                # 获取交易统计
+                total_pnl = results.get('total_pnl', 0)  # 使用引擎计算的总盈亏
+                total_trades = len(trades) if not trades.empty else 0
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -205,33 +199,9 @@ def main():
                 st.subheader("交易记录")
                 if total_trades > 0:
                     try:
-                        # 格式化数据
-                        trades_df['time'] = pd.to_datetime(trades_df['time']).dt.strftime('%Y-%m-%d')
-                        trades_df['price'] = trades_df['price'].map('{:.3f}'.format)
-                        trades_df['avg_price'] = trades_df['avg_price'].map('{:.4f}'.format)
-                        trades_df['return'] = trades_df['return'].map('{:.2%}'.format)
-                        trades_df['pnl'] = trades_df['pnl'].map('{:.2f}'.format)
-                        trades_df['size'] = trades_df['size'].astype(int)
-                        
-                        # 转换方向
-                        trades_df['direction'] = trades_df['direction'].map({'Long': '买入', 'Short': '卖出'})
-                        
-                        # 重命名列并选择要显示的列
-                        display_df = trades_df[['time', 'direction', 'price', 'avg_price', 'size', 'pnl', 'return', 'reason']]
-                        display_df = display_df.rename(columns={
-                            'time': '交易时间',
-                            'direction': '方向',
-                            'price': '成交价',
-                            'avg_price': '持仓均价',
-                            'size': '数量',
-                            'pnl': '盈亏',
-                            'return': '收益率',
-                            'reason': '交易原因'
-                        })
-                        
                         # 显示交易记录表格
                         st.dataframe(
-                            display_df,
+                            trades,
                             use_container_width=True,
                             hide_index=True
                         )

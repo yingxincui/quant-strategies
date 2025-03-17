@@ -7,9 +7,9 @@ import numpy as np
 
 class MarketSentimentStrategy(bt.Strategy):
     params = (
-        ('sentiment_buy_1', 25.0),   # 第一层情绪买入阈值
-        ('sentiment_buy_2', 21.0),   # 第二层情绪买入阈值
-        ('sentiment_sell', 70.0),    # 情绪卖出阈值
+        ('sentiment_buy_1', 20.0),   # 第一层情绪买入阈值
+        ('sentiment_buy_2', 10.0),   # 第二层情绪买入阈值
+        ('sentiment_sell', 80.0),    # 情绪卖出阈值
         ('position_layers', 4),       # 默认仓位层数
         ('trail_percent', 2.0),      # 追踪止损百分比
         ('risk_ratio', 0.02),        # 单次交易风险比率
@@ -153,6 +153,20 @@ class MarketSentimentStrategy(bt.Strategy):
                 self.trade_reason = f"触发最大回撤限制 ({drawdown:.2%})"
                 self.close()
                 logger.info(f"触发最大回撤限制 - 当前回撤: {drawdown:.2%}")
+                # 重置相关状态
+                self.entry_price = None
+                self.take_profit_price = None
+                self.entry_price_for_tp = None
+                if self.p.use_trailing_stop:
+                    self.trailing_stop.stop_tracking()
+                # 重置EMA历史
+                self.ema_history = []
+                self.close_history = []
+                # 重置买入日期集合
+                self.buy_dates = set()
+                # 重置最高净值，这样策略可以重新开始
+                self.highest_value = current_value
+                logger.info(f"重置最高净值至当前值: {current_value:.2f}")
             return
             
         current_price = self.data.close[0]
@@ -187,8 +201,8 @@ class MarketSentimentStrategy(bt.Strategy):
             
             # 市场情绪调整
             sentiment_factor = 1.0
-            if sentiment_value > 50:
-                # 市场情绪高于50，适度放大止盈倍数
+            if sentiment_value > 60:
+                # 市场情绪高于60，适度放大止盈倍数
                 sentiment_factor = 1.5
             elif sentiment_value < 30:
                 # 市场情绪低于30，适度缩小止盈倍数
@@ -221,44 +235,53 @@ class MarketSentimentStrategy(bt.Strategy):
             self.close_history.pop(0)
             
         # 检查EMA是否连续向上
-        ema_up = False
-        if len(self.ema_history) >= self.p.ema_up_days + 3:  # 需要更多历史数据来确认趋势
-            # 1. 检查EMA是否连续上涨指定天数 - 向量化实现
-            ema_array = np.array(self.ema_history[-(self.p.ema_up_days+1):])
-            is_ema_up_trend = np.all(np.diff(ema_array) > 0)
+        ema_up = True
+        # if len(self.ema_history) >= self.p.ema_up_days + 3:  # 需要更多历史数据来确认趋势
+        #     # 1. 检查EMA是否连续上涨指定天数 - 向量化实现
+        #     ema_array = np.array(self.ema_history[-(self.p.ema_up_days+1):])
+        #     is_ema_up_trend = np.all(np.diff(ema_array) > 0)
             
-            # 2. 检查价格是否高于EMA
-            price_above_ema = True
-            # current_price > self.ema[0]
+        #     # 2. 检查价格是否高于EMA
+        #     price_above_ema = True
+        #     # current_price > self.ema[0]
             
-            # 3. 检查短期EMA是否高于长期EMA (趋势确认)
-            ema_trend_aligned = self.ema[0] > self.ema_long[0]
+        #     # 3. 检查短期EMA是否高于长期EMA (趋势确认)
+        #     ema_trend_aligned = self.ema[0] > self.ema_long[0]
             
-            # 4. 检查收盘价是否也连续上涨 - 向量化实现
-            is_price_up_trend = True
-            # if len(self.close_history) >= 3:
-            #     close_array = np.array(self.close_history[-3:])
-            #     is_price_up_trend = np.all(np.diff(close_array) > 0)
+        #     # 4. 检查收盘价是否也连续上涨 - 向量化实现
+        #     is_price_up_trend = True
+        #     # if len(self.close_history) >= 3:
+        #     #     close_array = np.array(self.close_history[-3:])
+        #     #     is_price_up_trend = np.all(np.diff(close_array) > 0)
                     
-            # 5. 检查EMA斜率 (计算最近几天的平均变化率) - 向量化实现
-            ema_slope = 0
-            if len(self.ema_history) >= 5:
-                ema_recent = np.array(self.ema_history[-5:])
-                ema_changes = np.diff(ema_recent) / ema_recent[:-1]
-                ema_slope = np.mean(ema_changes)
+        #     # 5. 检查EMA斜率 (计算最近几天的平均变化率) - 向量化实现
+        #     ema_slope = 0
+        #     if len(self.ema_history) >= 5:
+        #         ema_recent = np.array(self.ema_history[-5:])
+        #         ema_changes = np.diff(ema_recent) / ema_recent[:-1]
+        #         ema_slope = np.mean(ema_changes)
             
-            positive_slope = ema_slope > 0.0001  # 要求EMA有正斜率
+        #     positive_slope = ema_slope > 0.0001  # 要求EMA有正斜率
             
-            # 同时满足所有条件
-            ema_up = is_ema_up_trend and price_above_ema and ema_trend_aligned and is_price_up_trend and positive_slope
+        #     # 同时满足所有条件
+        #     ema_up = is_ema_up_trend and price_above_ema and ema_trend_aligned and is_price_up_trend and positive_slope
             
-            logger.info(f"EMA趋势检查 - EMA连续上涨: {is_ema_up_trend}, 价格高于EMA: {price_above_ema}, "
-                      f"EMA趋势一致: {ema_trend_aligned}, 价格连续上涨: {is_price_up_trend}, "
-                      f"EMA斜率: {ema_slope:.6f}, 斜率足够: {positive_slope}, "
-                      f"当前EMA: {self.ema[0]:.4f}, 长期EMA: {self.ema_long[0]:.4f}")
+        #     logger.info(f"EMA趋势检查 - EMA连续上涨: {is_ema_up_trend}, 价格高于EMA: {price_above_ema}, "
+        #               f"EMA趋势一致: {ema_trend_aligned}, 价格连续上涨: {is_price_up_trend}, "
+        #               f"EMA斜率: {ema_slope:.6f}, 斜率足够: {positive_slope}, "
+        #               f"当前EMA: {self.ema[0]:.4f}, 长期EMA: {self.ema_long[0]:.4f}")
         
         # 买入或加仓逻辑
         if sentiment_value <= self.p.sentiment_buy_1:
+            # 检查当天情绪是否比前一天低
+            prev_date = (current_date - bt.datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+            prev_sentiment = self.sentiment_dict.get(prev_date)
+            
+            # 如果前一天的情绪数据存在，且当天情绪比前一天低，则不开仓
+            if prev_sentiment is not None and sentiment_value < prev_sentiment:
+                logger.info(f"当天情绪({sentiment_value:.1f})低于前一天({prev_sentiment:.1f})，放弃买入")
+                return
+            
             # 增加EMA向上的条件
             if not ema_up:
                 logger.info(f"EMA条件不满足，放弃买入 - 当前EMA: {self.ema[0]:.4f}, 当前价格: {current_price:.4f}")
@@ -340,8 +363,8 @@ class MarketSentimentStrategy(bt.Strategy):
                     
                     # 市场情绪调整
                     sentiment_factor = 1.0
-                    if sentiment_value > 50:
-                        # 市场情绪高于50，适度放大止盈倍数
+                    if sentiment_value > 60:
+                        # 市场情绪高于60，适度放大止盈倍数
                         sentiment_factor = 1.5
                         logger.info(f"市场情绪较高({sentiment_value:.1f})，调整情绪因子至: {sentiment_factor:.1f}")
                     elif sentiment_value < 30:
@@ -361,6 +384,8 @@ class MarketSentimentStrategy(bt.Strategy):
                               f"情绪因子: {sentiment_factor:.1f}, 最终倍数: {atr_multiplier:.2f})")
                 
                 order.info = {'reason': self.trade_reason}  # 记录交易原因
+                order.info['total_value'] = self.broker.getvalue()  # 记录总资产（含现金）
+                order.info['position_value'] = self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(f'买入执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, 原因: {self.trade_reason}')
             else:
@@ -370,6 +395,8 @@ class MarketSentimentStrategy(bt.Strategy):
                 if self.p.use_trailing_stop:
                     self.trailing_stop.stop_tracking()
                 order.info = {'reason': self.trade_reason}  # 记录交易原因
+                order.info['total_value'] = self.broker.getvalue()  # 记录总资产（含现金）
+                order.info['position_value'] = self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(f'卖出执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, 原因: {self.trade_reason}')
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:

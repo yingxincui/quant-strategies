@@ -166,7 +166,11 @@ class DualMAStrategy(bt.Strategy):
             if order.isbuy():
                 # 买入订单执行后立即重置追踪止损，使用实际成交价
                 self.trailing_stop.reset(price=order.executed.price)
-                order.info = {'reason': self.trade_reason}  # 记录交易原因
+                order.info = {
+                    'reason': self.trade_reason,
+                    'total_value': self.broker.getvalue(),  # 记录总资产（含现金）
+                    'position_value': self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
+                }
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(
                     f'买入执行 - 价格: {order.executed.price:.2f}, '
@@ -177,7 +181,11 @@ class DualMAStrategy(bt.Strategy):
                 # 重置入场价格并停止追踪
                 self.entry_price = None
                 self.trailing_stop.stop_tracking()
-                order.info = {'reason': self.trade_reason}  # 记录交易原因
+                order.info = {
+                    'reason': self.trade_reason,
+                    'total_value': self.broker.getvalue(),  # 记录总资产（含现金）
+                    'position_value': self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
+                }
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(
                     f'卖出执行 - 价格: {order.executed.price:.2f}, '

@@ -405,6 +405,7 @@ class BacktestEngine:
                         
                         # 获取交易原因
                         trade_info = None
+                        total_value = None
                         
                         # 直接使用策略当前的trade_reason
                         for order in strategy._orders:
@@ -412,6 +413,7 @@ class BacktestEngine:
                                 abs(order.executed.price - price) < 0.000001 and 
                                 order.isbuy()):
                                 trade_info = order.info.get('reason') if hasattr(order, 'info') else None
+                                total_value = order.info.get('total_value') if hasattr(order, 'info') else None
                                 break
                         
                         if not trade_info:
@@ -426,7 +428,9 @@ class BacktestEngine:
                             'avg_price': position['avg_price'],
                             'pnl': 0,
                             'return': 0,
-                            'reason': trade_info
+                            'reason': trade_info,
+                            'total_value': total_value,  # 总资产（含现金）
+                            'position_value': order.info.get('position_value') if hasattr(order, 'info') else 0  # 持仓市值
                         })
                     else:  # 卖出
                         size = abs(size)
@@ -437,6 +441,7 @@ class BacktestEngine:
                         
                         # 获取交易原因
                         trade_info = None
+                        total_value = None
                         
                         # 直接使用策略当前的trade_reason
                         for order in strategy._orders:
@@ -444,6 +449,7 @@ class BacktestEngine:
                                 abs(order.executed.price - price) < 0.000001 and 
                                 not order.isbuy()):
                                 trade_info = order.info.get('reason') if hasattr(order, 'info') else None
+                                total_value = order.info.get('total_value') if hasattr(order, 'info') else None
                                 break
                         
                         if not trade_info:
@@ -458,7 +464,9 @@ class BacktestEngine:
                             'avg_price': position['avg_price'],
                             'pnl': pnl,
                             'return': ret,
-                            'reason': trade_info
+                            'reason': trade_info,
+                            'total_value': total_value,  # 总资产（含现金）
+                            'position_value': order.info.get('position_value') if hasattr(order, 'info') else 0  # 持仓市值
                         })
                         
                         # 更新持仓
@@ -473,10 +481,47 @@ class BacktestEngine:
             # 按时间排序
             trades.sort(key=lambda x: x['time'])
             
+            # 转换为DataFrame
+            trades_df = pd.DataFrame(trades)
+            
+            # 计算总盈亏（在格式化之前）
+            total_pnl = trades_df['pnl'].astype(float).sum()
+            
+            # 格式化数据
+            trades_df['time'] = pd.to_datetime(trades_df['time']).dt.strftime('%Y-%m-%d')
+            trades_df['price'] = trades_df['price'].map('{:.3f}'.format)
+            trades_df['avg_price'] = trades_df['avg_price'].map('{:.4f}'.format)
+            trades_df['return'] = trades_df['return'].map('{:.2%}'.format)
+            trades_df['pnl'] = trades_df['pnl'].map('{:.2f}'.format)
+            trades_df['size'] = trades_df['size'].astype(int)
+            trades_df['total_value'] = trades_df['total_value'].map('{:.2f}'.format)
+            trades_df['position_value'] = trades_df['position_value'].map('{:.2f}'.format)
+            
+            # 转换方向
+            trades_df['direction'] = trades_df['direction'].map({'Long': '买入', 'Short': '卖出'})
+            
+            # 重命名列并选择要显示的列
+            display_df = trades_df[['time', 'direction', 'price', 'avg_price', 'size', 'total_value', 'position_value', 'pnl', 'return', 'reason']]
+            display_df = display_df.rename(columns={
+                'time': '交易时间',
+                'direction': '方向',
+                'price': '成交价',
+                'avg_price': '持仓均价',
+                'size': '数量',
+                'total_value': '总资产',
+                'position_value': '持仓市值',
+                'pnl': '盈亏',
+                'return': '收益率',
+                'reason': '交易原因'
+            })
+            
         except Exception as e:
             logger.warning(f"处理交易记录时出错: {str(e)}")
             logger.warning(f"交易记录内容: {txn_analysis}")
-            
-        analysis['trades'] = trades
+            display_df = pd.DataFrame()  # 返回空DataFrame
+            total_pnl = 0
+        
+        analysis['trades'] = display_df
+        analysis['total_pnl'] = total_pnl  # 添加总盈亏到分析结果中
         
         return analysis 
