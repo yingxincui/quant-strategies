@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import os
 from src.data.data_loader import DataLoader
+# 添加arch库导入支持GARCH模型
+from arch import arch_model
 
 def get_sentiment_data():
     """获取市场情绪指标"""
@@ -34,37 +36,166 @@ def get_sentiment_data():
             }
             index_codes = list(index_weights.keys())
             
-            def hybrid_normalize(series, short_window=60, long_window=252):
-                """动态混合归一化函数
-                短期窗口提供敏感性，长期窗口提供稳定性
-                根据近期波动率动态调整两个窗口的权重
-                """
-                # 处理零除情况
-                def safe_normalize(s, window):
-                    min_val = s.rolling(window, min_periods=1).min()
-                    max_val = s.rolling(window, min_periods=1).max()
-                    diff = max_val - min_val
-                    # 当最大最小值相同时返回50
-                    return np.where(diff == 0, 50, 100 * (s - min_val) / diff)
+            # 优化2：混合归一化改进
+            def hybrid_normalize(series, short_window=30, long_window=180):
+                """改进的动态窗口归一化"""
+                # 自适应窗口调整（根据近期波动率）
+                volatility = series.diff().abs().rolling(10).std()
+                # 修复：确保动态窗口始终有有效整数值，处理NA和inf
+                volatility = volatility.fillna(0)  # 填充NA为0
+                volatility = np.clip(volatility, 0, 0.1)  # 限制波动率范围，避免极端值
                 
-                # 短期和长期归一化
-                short_norm = safe_normalize(series, short_window)
-                long_norm = safe_normalize(series, long_window)
+                # 计算动态窗口并确保为整数
+                dynamic_short = np.maximum(10, np.minimum(60, (short_window * (1 + volatility/0.02))))
+                dynamic_short = dynamic_short.astype(int)  # 确保转换为整数
                 
-                # 计算动态混合权重
-                volatility = series.diff().abs().rolling(10).mean()
-                blend_ratio = np.clip(volatility / 0.05, 0, 1)  # 波动率>5%时完全使用短期
+                # 滚动极值计算（前向窗口）
+                def forward_max(s, window_series):
+                    """使用变长窗口计算前向最大值"""
+                    result = pd.Series(index=s.index)
+                    for i in range(len(s)):
+                        if pd.isna(s.iloc[i]):
+                            result.iloc[i] = np.nan
+                            continue
+                        
+                        # 确保窗口大小为有效整数
+                        window = max(1, int(window_series.iloc[i]))
+                        start_idx = max(0, i - window + 1)
+                        window_data = s.iloc[start_idx:i+1]
+                        result.iloc[i] = window_data.max() if not window_data.empty else s.iloc[i]
+                    return result
                 
-                # 混合结果
-                return pd.Series(short_norm * blend_ratio + long_norm * (1 - blend_ratio), index=series.index)
+                def forward_min(s, window_series):
+                    """使用变长窗口计算前向最小值"""
+                    result = pd.Series(index=s.index)
+                    for i in range(len(s)):
+                        if pd.isna(s.iloc[i]):
+                            result.iloc[i] = np.nan
+                            continue
+                        
+                        # 确保窗口大小为有效整数
+                        window = max(1, int(window_series.iloc[i]))
+                        start_idx = max(0, i - window + 1)
+                        window_data = s.iloc[start_idx:i+1]
+                        result.iloc[i] = window_data.min() if not window_data.empty else s.iloc[i]
+                    return result
+                
+                # 处理series中的NA值
+                clean_series = series.copy()
+                clean_series = clean_series.fillna(method='ffill').fillna(method='bfill')
+                
+                # 动态极值计算
+                max_vals = forward_max(clean_series, dynamic_short)
+                min_vals = forward_min(clean_series, dynamic_short)
+                
+                # 安全归一化
+                diff = max_vals - min_vals
+                # 处理零或接近零的差值
+                diff = np.where(diff < 1e-6, 1.0, diff)  # 避免除以零或接近零的值
+                norm = np.where(diff < 1e-6, 50, 100 * (clean_series - min_vals) / diff)
+                
+                return pd.Series(norm, index=series.index)
             
-            def rsi_smooth_weight(rsi):
-                """RSI平滑权重函数，使用sigmoid实现渐变过渡"""
-                return 1 / (1 + np.exp(-0.2 * (rsi - 70)))  # RSI=70时权重0.5，80时0.88，90时0.98
+            # 优化5：RSI权重机制改进
+            def rsi_smooth_weight(rsi, price_trend):
+                """动态RSI权重，考虑价格趋势"""
+                # 确保输入数据没有NA值
+                rsi_clean = rsi.fillna(50)  # RSI默认值50
+                price_clean = price_trend.fillna(method='ffill').fillna(method='bfill')
+                
+                base_weight = 1 / (1 + np.exp(-0.15*(rsi_clean - 65)))
+                
+                # 检测顶背离：价格新高但RSI未新高
+                # 确保rolling操作不产生NA值
+                price_high = price_clean.rolling(30, min_periods=1).max()
+                rsi_high = rsi_clean.rolling(30, min_periods=1).max()
+                
+                divergence = (price_clean >= price_high * 0.99) & (rsi_clean < rsi_high * 0.95)
+                
+                # 出现顶背离时降低权重
+                result = np.where(divergence, base_weight*0.5, base_weight)
+                return pd.Series(result, index=rsi.index)
             
+            # 优化3：钝化函数调优
             def smooth_plateau(raw_score):
-                """渐进式高位钝化函数"""
-                return 100 * (1 - np.exp(-0.03 * raw_score))  # 分数越高增速越慢，避免陡峭顶部
+                """改进的S型钝化曲线"""
+                # 确保输入值有效
+                if pd.isna(raw_score):
+                    return 50.0  # 默认中性值
+                
+                # 避免极端值
+                raw_score = np.clip(raw_score, 0, 100)
+                
+                # 保持80-100分的线性区间，避免过度抑制
+                if raw_score <= 80:
+                    return 0.8 * raw_score  # 0-80分线性缩放
+                else:
+                    exp_portion = 100 * (1 - np.exp(-0.02*(raw_score-80)))
+                    return 80 + exp_portion*(20/16.5)  # 80-100分渐进曲线
+            
+            # 优化1：趋势检测函数
+            def detect_trend(series):
+                """复合趋势检测"""
+                # 处理NA值
+                clean_series = series.fillna(method='ffill').fillna(method='bfill')
+                
+                # 双均线交叉
+                fast_ma = clean_series.ewm(span=5, adjust=False).mean()
+                slow_ma = clean_series.ewm(span=20, adjust=False).mean()
+                cross_over = (fast_ma > slow_ma) & (fast_ma.shift(1).fillna(0) <= slow_ma.shift(1).fillna(0))
+                cross_under = (fast_ma < slow_ma) & (fast_ma.shift(1).fillna(0) >= slow_ma.shift(1).fillna(0))
+                
+                # 价格通道突破
+                high_20 = clean_series.rolling(20, min_periods=1).max()
+                low_20 = clean_series.rolling(20, min_periods=1).min()
+                break_up = clean_series > high_20.shift(1).fillna(0)
+                break_down = clean_series < low_20.shift(1).fillna(float('inf'))  # 使用无穷大确保初始值不会触发
+                
+                # 综合判断
+                trend = np.select(
+                    [cross_over | break_up, cross_under | break_down],
+                    [1, -1],
+                    default=0  # 使用0作为默认值而不是np.nan
+                )
+                
+                # 使用前向填充处理剩余的可能缺失值
+                result = pd.Series(trend, index=series.index).fillna(0)
+                return result
+            
+            # 优化4：GARCH模型计算波动率
+            def calculate_garch_vol(returns, window=60):
+                """使用GARCH模型估计条件波动率"""
+                vols = []
+                for i in range(len(returns)):
+                    if i < window:
+                        vols.append(0.01)  # 使用1%的初始波动率而非NA
+                        continue
+                    
+                    try:
+                        # 使用最近的window个数据拟合GARCH(1,1)模型
+                        r = returns.iloc[i-window:i].dropna().values
+                        if len(r) < window/2:  # 数据太少，使用传统方法
+                            std = returns.iloc[max(0, i-window):i].std()
+                            vols.append(std if not pd.isna(std) else 0.01)
+                            continue
+                            
+                        # 处理极端值
+                        r = np.clip(r, -0.1, 0.1)  # 限制收益率范围
+                        
+                        model = arch_model(r, vol='Garch', p=1, q=1, rescale=False)
+                        res = model.fit(disp='off', show_warning=False, options={'maxiter': 100})
+                        forecast = res.forecast(horizon=1)
+                        vol = np.sqrt(forecast.variance.values[-1,0])
+                        vols.append(vol if not np.isnan(vol) and vol > 0 else 0.01)
+                    except Exception as e:
+                        # 如果GARCH拟合失败，回退到传统方法
+                        logger.warning(f"GARCH fitting failed, fallback to traditional method: {str(e)[:100]}")
+                        std = returns.iloc[max(0, i-window):i].std()
+                        vols.append(std if not pd.isna(std) else 0.01)
+                
+                # 确保没有极端值
+                vols = np.clip(vols, 0.001, 0.5)  # 限制波动率范围
+                return pd.Series(vols, index=returns.index)
             
             index_data_list = []
             for ts_code in index_codes:
@@ -98,18 +229,43 @@ def get_sentiment_data():
                     # 确保数据按日期排序
                     single_index = single_index.sort_values('trade_date')
                     
-                    # 计算趋势方向（使用EMA平滑）
-                    single_index['ma20'] = single_index['close'].ewm(span=20, adjust=False).mean()
-                    single_index['trend'] = np.where(single_index['ma20'].diff() > 0, 1, -1)
+                    # 预处理：确保数值列没有NA
+                    for col in ['close', 'vol', 'pct_chg']:
+                        if col in single_index.columns:
+                            single_index[col] = single_index[col].fillna(method='ffill').fillna(method='bfill')
+                            # 检测无穷值
+                            single_index[col] = single_index[col].replace([np.inf, -np.inf], np.nan).fillna(
+                                single_index[col].mean() if not single_index[col].empty else 0
+                            )
+                    
+                    # 使用优化1：复合趋势检测
+                    single_index['trend'] = detect_trend(single_index['close'])
                     
                     # 计算技术指标
-                    # 1. 分别计算上涨和下跌波动率（使用EMA平滑）
+                    # 使用优化4：GARCH模型波动率
                     returns = single_index['pct_chg'] / 100
-                    # 计算正向和负向波动率
-                    positive_returns = returns.where(returns > 0, 0)
-                    negative_returns = returns.where(returns < 0, 0)
-                    single_index['positive_volatility'] = positive_returns.ewm(span=10, adjust=False).std() * np.sqrt(252) * 100
-                    single_index['negative_volatility'] = (-negative_returns).ewm(span=10, adjust=False).std() * np.sqrt(252) * 100
+                    
+                    # 尝试使用GARCH模型，如果失败则回退到原方法
+                    try:
+                        # 计算条件波动率
+                        single_index['conditional_vol'] = calculate_garch_vol(returns) * np.sqrt(252) * 100
+                        
+                        # 分别计算上涨和下跌的条件波动率
+                        positive_cond = returns > 0
+                        single_index['positive_volatility'] = single_index['conditional_vol'] * positive_cond
+                        single_index['negative_volatility'] = single_index['conditional_vol'] * (~positive_cond)
+                    except Exception as e:
+                        logger.warning(f"Error in GARCH calculation, fallback to traditional method: {e}")
+                        # 回退到原方法计算波动率
+                        positive_returns = returns.where(returns > 0, 0)
+                        negative_returns = returns.where(returns < 0, 0)
+                        single_index['positive_volatility'] = positive_returns.ewm(span=10, adjust=False).std() * np.sqrt(252) * 100
+                        single_index['negative_volatility'] = (-negative_returns).ewm(span=10, adjust=False).std() * np.sqrt(252) * 100
+                    
+                    # 确保波动率没有NA或Inf
+                    for col in ['positive_volatility', 'negative_volatility', 'conditional_vol']:
+                        if col in single_index.columns:
+                            single_index[col] = single_index[col].fillna(0).replace([np.inf, -np.inf], 0)
                     
                     # 2. RSI - 使用双重EMA平滑
                     delta = single_index['close'].diff()
@@ -118,25 +274,32 @@ def get_sentiment_data():
                     # 使用更长的EMA窗口进行平滑
                     avg_gain = gain.ewm(alpha=1/21, adjust=False).mean()  # 21日EMA
                     avg_loss = loss.ewm(alpha=1/21, adjust=False).mean()
-                    rs = avg_gain / avg_loss
+                    # 避免除零错误
+                    rs = avg_gain / avg_loss.replace(0, 0.000001)
                     single_index['rsi'] = 100 - (100 / (1 + rs))
-                    # 应用平滑RSI权重
-                    single_index['rsi_weight'] = single_index['rsi'].apply(rsi_smooth_weight)
+                    single_index['rsi'] = single_index['rsi'].clip(0, 100)  # 限制RSI在0-100范围内
+                    
+                    # 使用优化5：改进的RSI权重计算
+                    single_index['rsi_weight'] = rsi_smooth_weight(single_index['rsi'], single_index['close'])
                     
                     # 3. 布林带 - 使用EMA平滑
                     sma = single_index['close'].ewm(span=20, adjust=False).mean()
                     std = single_index['close'].ewm(span=20, adjust=False).std()
-                    single_index['bb_position'] = (single_index['close'] - sma) / (2 * std)
+                    single_index['bb_position'] = (single_index['close'] - sma) / (2 * std.replace(0, 0.000001))
+                    single_index['bb_position'] = single_index['bb_position'].clip(-3, 3)  # 限制布林带位置
                     
                     # 4. 成交量变化（使用EMA平滑）
                     single_index['volume_ma'] = single_index['vol'].ewm(span=20, adjust=False).mean()
-                    single_index['volume_ratio'] = single_index['vol'] / single_index['volume_ma']
+                    # 避免除零错误
+                    single_index['volume_ratio'] = single_index['vol'] / single_index['volume_ma'].replace(0, 0.000001)
+                    single_index['volume_ratio'] = single_index['volume_ratio'].clip(0, 5)  # 限制成交量比例
                     
                     # 计算综合情绪分数（考虑指标方向性和趋势）
                     # 使用更平缓的趋势因子
                     trend_factor = np.where(single_index['trend'] == 1, 1.1, 0.9)  # 降低趋势影响
                     
                     # 波动率处理：上涨波动率正向贡献，下跌波动率反向处理
+                    # 使用优化2：改进的混合归一化函数
                     volatility_score = (
                         hybrid_normalize(single_index['positive_volatility']) * 0.15 +  # 上涨波动率正向贡献
                         (100 - hybrid_normalize(single_index['negative_volatility'])) * 0.15  # 下跌波动率反向处理
@@ -158,72 +321,93 @@ def get_sentiment_data():
                     volatility_mask = ((single_index['positive_volatility'] + single_index['negative_volatility']) > volatility_threshold).astype(float)
                     raw_sentiment_score = raw_sentiment_score * (0.2 + 0.8 * volatility_mask)
                     
-                    # 应用渐进式高位钝化
-                    single_index['sentiment_score'] = raw_sentiment_score.apply(smooth_plateau)
+                    # 使用优化3：改进的钝化函数
+                    single_index['sentiment_score'] = raw_sentiment_score.apply(lambda x: smooth_plateau(x))
                     
                     # 最终情绪分二次平滑（5日EMA）
                     single_index['sentiment_score'] = single_index['sentiment_score'].ewm(span=5, adjust=False).mean()
                     
-                    # 仅使用前向填充
-                    single_index = single_index.fillna(method='ffill')
+                    # 确保结果中没有NA或inf
+                    single_index = single_index.fillna(method='ffill').fillna(method='bfill')
+                    # 处理所有可能的inf值
+                    for col in single_index.columns:
+                        if single_index[col].dtype == 'float64' or single_index[col].dtype == 'int64':
+                            single_index[col] = single_index[col].replace([np.inf, -np.inf], np.nan).fillna(
+                                single_index[col].mean() if not pd.isna(single_index[col]).all() else 0
+                            )
                     
                     # 添加到结果列表
-                    sentiment_results.extend([
-                        {
-                            'date': row['trade_date'].strftime('%Y-%m-%d'),
-                            'value': float(row['sentiment_score']) if not pd.isna(row['sentiment_score']) else 50,
-                            'weight': float(row['weight']),
-                            'details': {
-                                'index_code': ts_code,
-                                'positive_volatility': float(row['positive_volatility']) if not pd.isna(row['positive_volatility']) else 0,
-                                'negative_volatility': float(row['negative_volatility']) if not pd.isna(row['negative_volatility']) else 0,
-                                'rsi': float(row['rsi']) if not pd.isna(row['rsi']) else 50,
-                                'rsi_weight': float(row['rsi_weight']) if not pd.isna(row['rsi_weight']) else 0.5,
-                                'bb_position': float(row['bb_position']) if not pd.isna(row['bb_position']) else 0,
-                                'volume_ratio': float(row['volume_ratio']) if not pd.isna(row['volume_ratio']) else 1,
-                                'trend': int(row['trend']) if not pd.isna(row['trend']) else 0,
-                                'close': float(row['close']),
-                                'change': float(row['pct_chg'])
-                            }
-                        }
-                        for _, row in single_index.iterrows()
-                        if not pd.isna(row['sentiment_score'])
-                    ])
-                
-                # 按日期分组计算加权平均情绪分数
-                sentiment_df = pd.DataFrame(sentiment_results)
-                result['sentiment'] = sentiment_df.groupby('date').apply(
-                    lambda group: {
-                        'date': group['date'].iloc[0],
-                        'value': float((group['value'] * group['weight']).sum() / group['weight'].sum()),
-                        'details': {
-                            'positive_volatility': float(group['details'].apply(lambda x: x['positive_volatility']).mean()),
-                            'negative_volatility': float(group['details'].apply(lambda x: x['negative_volatility']).mean()),
-                            'rsi': float(group['details'].apply(lambda x: x['rsi']).mean()),
-                            'rsi_weight': float(group['details'].apply(lambda x: x['rsi_weight']).mean()),
-                            'bb_position': float(group['details'].apply(lambda x: x['bb_position']).mean()),
-                            'volume_ratio': float(group['details'].apply(lambda x: x['volume_ratio']).mean()),
-                            'trend': int(group['details'].apply(lambda x: x['trend']).mean()),
-                            'close': float(group['details'].apply(lambda x: x['close']).mean()),
-                            'change': float(group['details'].apply(lambda x: x['change']).mean()),
-                            'indices': [
-                                {
-                                    'code': detail['index_code'],
-                                    'close': float(detail['close']),
-                                    'change': float(detail['change']),
-                                    'positive_volatility': float(detail['positive_volatility']),
-                                    'negative_volatility': float(detail['negative_volatility']),
-                                    'rsi': float(detail['rsi']),
-                                    'rsi_weight': float(detail['rsi_weight']),
-                                    'bb_position': float(detail['bb_position']),
-                                    'volume_ratio': float(detail['volume_ratio']),
-                                    'trend': int(detail['trend'])
+                    for _, row in single_index.iterrows():
+                        # 仅当sentiment_score存在且有效时添加
+                        if 'sentiment_score' in row and not pd.isna(row['sentiment_score']):
+                            sentiment_results.append({
+                                'date': row['trade_date'].strftime('%Y-%m-%d'),
+                                'value': float(row['sentiment_score']),
+                                'weight': float(row['weight']),
+                                'details': {
+                                    'index_code': ts_code,
+                                    'positive_volatility': float(row['positive_volatility']),
+                                    'negative_volatility': float(row['negative_volatility']),
+                                    'rsi': float(row['rsi']),
+                                    'rsi_weight': float(row['rsi_weight']),
+                                    'bb_position': float(row['bb_position']),
+                                    'volume_ratio': float(row['volume_ratio']),
+                                    'trend': int(row['trend']),
+                                    'close': float(row['close']),
+                                    'change': float(row['pct_chg']),
+                                    'conditional_vol': float(row['conditional_vol']) if 'conditional_vol' in row else 0
                                 }
-                                for detail in group['details']
-                            ]
-                        }
-                    }
-                ).tolist()
+                            })
+                
+                if sentiment_results:
+                    # 按日期分组计算加权平均情绪分数
+                    sentiment_df = pd.DataFrame(sentiment_results)
+                    try:
+                        result['sentiment'] = sentiment_df.groupby('date').apply(
+                            lambda group: {
+                                'date': group['date'].iloc[0],
+                                'value': float((group['value'] * group['weight']).sum() / group['weight'].sum()),
+                                'details': {
+                                    'positive_volatility': float(group['details'].apply(lambda x: x['positive_volatility']).mean()),
+                                    'negative_volatility': float(group['details'].apply(lambda x: x['negative_volatility']).mean()),
+                                    'rsi': float(group['details'].apply(lambda x: x['rsi']).mean()),
+                                    'rsi_weight': float(group['details'].apply(lambda x: x['rsi_weight']).mean()),
+                                    'bb_position': float(group['details'].apply(lambda x: x['bb_position']).mean()),
+                                    'volume_ratio': float(group['details'].apply(lambda x: x['volume_ratio']).mean()),
+                                    'trend': int(round(group['details'].apply(lambda x: x['trend']).mean())),
+                                    'close': float(group['details'].apply(lambda x: x['close']).mean()),
+                                    'change': float(group['details'].apply(lambda x: x['change']).mean()),
+                                    'conditional_vol': float(group['details'].apply(lambda x: x.get('conditional_vol', 0)).mean()),
+                                    'indices': [
+                                        {
+                                            'code': detail['index_code'],
+                                            'close': float(detail['close']),
+                                            'change': float(detail['change']),
+                                            'positive_volatility': float(detail['positive_volatility']),
+                                            'negative_volatility': float(detail['negative_volatility']),
+                                            'rsi': float(detail['rsi']),
+                                            'rsi_weight': float(detail['rsi_weight']),
+                                            'bb_position': float(detail['bb_position']),
+                                            'volume_ratio': float(detail['volume_ratio']),
+                                            'trend': int(detail['trend']),
+                                            'conditional_vol': float(detail.get('conditional_vol', 0))
+                                        }
+                                        for detail in group['details']
+                                    ]
+                                }
+                            }
+                        ).tolist()
+                    except Exception as e:
+                        logger.error(f"Error in groupby aggregation: {e}")
+                        # 回退方案：简单返回不分组的结果
+                        result['sentiment'] = [
+                            {
+                                'date': item['date'],
+                                'value': float(item['value']),
+                                'details': item['details']
+                            }
+                            for item in sentiment_results
+                        ]
                 
                 # 按日期排序
                 result['sentiment'].sort(key=lambda x: x['date'])
@@ -233,6 +417,8 @@ def get_sentiment_data():
                 logger.warning("No index data available for sentiment calculation")
         except Exception as e:
             logger.error(f"Error calculating sentiment indicators: {e}")
+            import traceback
+            logger.error(traceback.format_exc())  # 打印完整堆栈跟踪
             result['sentiment'] = []
 
         # 对所有数据按日期排序
@@ -243,4 +429,6 @@ def get_sentiment_data():
 
     except Exception as e:
         logger.error(f"Error in get_sentiment_data: {e}")
+        import traceback
+        logger.error(traceback.format_exc())  # 打印完整堆栈跟踪
         return None

@@ -123,15 +123,12 @@ def main():
                 # 下载数据
                 logger.info(f"开始下载数据 - 股票代码: {symbol}")
                 data_loader = DataLoader(tushare_token=tushare_token)
-                df = data_loader.download_data(symbol, start_date, end_date)
+                data = data_loader.download_data(symbol, start_date, end_date)
                 
-                if df.empty:
+                if data is None:
                     st.error("未获取到数据，请检查股票代码和日期范围")
                     return
                     
-                # 创建数据源
-                data = PandasData(dataname=df)
-                
                 # 获取策略类
                 strategy_class = StrategyFactory.get_strategy(strategy_name)
                 if not strategy_class:
@@ -229,6 +226,8 @@ def main():
                 
             except Exception as e:
                 logger.error(f"回测过程中出现错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 st.error(f"回测失败: {str(e)}")
 
 if __name__ == "__main__":

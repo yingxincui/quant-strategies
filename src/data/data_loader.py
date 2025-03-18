@@ -35,15 +35,24 @@ class DataLoader:
             if symbol.endswith(('.SH', '.SZ')):  # A股或ETF
                 if symbol.startswith('51') or symbol.startswith('159'):  # ETF
                     logger.info(f"使用AKShare下载ETF数据: {symbol}")
-                    return self._download_etf_data(symbol, start_date, end_date)
+                    df = self._download_etf_data(symbol, start_date, end_date)
                 else:  # A股
                     logger.info(f"使用Tushare下载A股数据: {symbol}")
-                    return self._download_stock_data(symbol, start_str, end_str)
+                    df = self._download_stock_data(symbol, start_str, end_str)
             elif symbol.endswith('.HK'):  # 港股
                 logger.info(f"使用AKShare下载港股数据: {symbol}")
-                return self._download_hk_data(symbol, start_date, end_date)
+                df = self._download_hk_data(symbol, start_date, end_date)
             else:
                 raise ValueError(f"不支持的市场类型: {symbol}")
+                
+            logger.info(f"下载数据成功: {symbol}，数据长度: {len(df)}")
+
+            if df.empty:
+                return None
+                
+            # 创建PandasData对象并设置股票代码
+            data = PandasData(dataname=df, ts_code=symbol)
+            return data
                 
         except Exception as e:
             logger.error(f"下载数据失败: {str(e)}")
@@ -136,15 +145,20 @@ class DataLoader:
             return pd.DataFrame()
 
 class PandasData(bt.feeds.PandasData):
-    """
-    自定义数据加载器，用于处理DataFrame数据
-    """
+    """自定义PandasData类，用于加载数据"""
     params = (
-        ('datetime', None),
+        ('datetime', None),  # 使用索引作为日期
         ('open', 'open'),
         ('high', 'high'),
         ('low', 'low'),
         ('close', 'close'),
         ('volume', 'volume'),
         ('openinterest', None),
-    ) 
+        ('ts_code', None),  # 股票代码
+    )
+    
+    def __init__(self, **kwargs):
+        """初始化数据源"""
+        # 从kwargs中获取ts_code
+        self.ts_code = kwargs.pop('ts_code', None)
+        super().__init__(**kwargs) 

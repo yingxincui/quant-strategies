@@ -27,18 +27,27 @@ class AShareCommissionInfo(bt.CommInfoBase):
 
 class BacktestEngine:
     def __init__(self, strategy_class, data_feed, cash=100000.0, commission=0.00025, strategy_params=None):
+        """初始化回测引擎"""
         self.cerebro = bt.Cerebro()
+        self.cerebro.broker.setcash(cash)
+        self.cerebro.broker.setcommission(commission=commission)
         
+        # 添加数据源
+        try:
+            self.cerebro.adddata(data_feed)
+        except Exception as e:
+            logger.warning(f"添加数据源时出错: {str(e)}")
+            # 如果出错，尝试不带ts_code参数添加
+            if hasattr(data_feed, 'params'):
+                data_feed.params.pop('ts_code', None)
+            self.cerebro.adddata(data_feed)
+            
         # 添加策略和参数
         if strategy_params:
             self.cerebro.addstrategy(strategy_class, **strategy_params)
         else:
             self.cerebro.addstrategy(strategy_class)
             
-        self.cerebro.adddata(data_feed)
-        self.cerebro.broker.setcash(cash)
-        
-        
         # 添加分析器
         self.cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', riskfreerate=0.02)
         self.cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
@@ -350,6 +359,16 @@ class BacktestEngine:
         
         # 从交易记录中统计各项费用
         txn_analysis = strategy.analyzers.txn.get_analysis()
+        
+        # 检查交易记录是否为空
+        if not txn_analysis:
+            logger.warning("回测期间没有产生任何交易")
+            analysis['trades'] = pd.DataFrame()
+            analysis['total_pnl'] = 0
+            analysis['total_commission'] = 0
+            analysis['total_cost'] = 0
+            return analysis
+            
         for date, txns in txn_analysis.items():
             for txn in txns:
                 if len(txn) >= 2:  # 确保有手续费信息
@@ -374,6 +393,14 @@ class BacktestEngine:
             # 使用transactions分析器获取交易记录
             txn_analysis = strategy.analyzers.txn.get_analysis()
             
+            # 如果没有交易记录，返回空DataFrame
+            if not txn_analysis:
+                display_df = pd.DataFrame()
+                total_pnl = 0
+                analysis['trades'] = display_df
+                analysis['total_pnl'] = total_pnl
+                return analysis
+                
             # 临时存储开仓信息
             position = {
                 'size': 0,
