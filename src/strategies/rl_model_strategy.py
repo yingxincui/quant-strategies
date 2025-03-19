@@ -3,8 +3,6 @@ import numpy as np
 import pandas as pd
 import torch
 from loguru import logger
-from src.strategies.rl_model_finrl.agents.elegantrl.ppo_agent import PPOAgent
-from src.strategies.rl_model_finrl.meta.data_processors import DataProcessor
 import json
 from src.strategies.rl_model_finrl.agents.stablebaseline3 import DQNAgent
 
@@ -27,13 +25,6 @@ class RLModelStrategy(bt.Strategy):
             with open(self.p.config_path, 'r') as f:
                 config_dict = json.load(f)
                 # TODO: 从字典更新配置
-
-        # 初始化数据处理器
-        self.data_processor = DataProcessor(
-            price_scaler='zscore',
-            feature_scaler='minmax',
-            window_size=self.p.window_size
-        )
 
         # 设置设备
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
