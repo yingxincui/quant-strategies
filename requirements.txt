@@ -10,3 +10,8 @@ hyperopt
 plotly
 bokeh
 arch
+ray
+stable-baselines3
+gym
+torch
+scikit-learn

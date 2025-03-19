@@ -2,11 +2,15 @@ from typing import Type, Dict
 import backtrader as bt
 from .dual_ma_strategy import DualMAStrategy
 from .market_sentiment_strategy import MarketSentimentStrategy
+from .etf_rotation_strategy import ETFRotationStrategy
+from .rl_model_strategy import RLModelStrategy
 
 class StrategyFactory:
     _strategies: Dict[str, Type[bt.Strategy]] = {
         "双均线策略（示例）": DualMAStrategy,
         "市场情绪策略": MarketSentimentStrategy,
+        "ETF轮动策略": ETFRotationStrategy,
+        "强化学习模型策略": RLModelStrategy,
     }
 
     @classmethod

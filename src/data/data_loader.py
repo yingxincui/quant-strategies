@@ -21,15 +21,27 @@ class DataLoader:
     def download_data(self, symbol, start_date, end_date):
         """
         下载数据，支持A股、ETF和港股
-        :param symbol: 股票代码（格式：000001.SZ, 510300.SH, 00700.HK等）
+        :param symbol: 股票代码（格式：000001.SZ, 510300.SH, 00700.HK等）或ETF代码列表
         :param start_date: 开始日期
         :param end_date: 结束日期
-        :return: DataFrame
+        :return: DataFrame或DataFrame列表
         """
         try:
             # 转换日期格式
             start_str = start_date.strftime("%Y%m%d")
             end_str = end_date.strftime("%Y%m%d")
+            
+            # 如果是ETF轮动策略，symbol应该是一个列表
+            if isinstance(symbol, list):
+                logger.info(f"开始下载多个ETF数据: {symbol}")
+                data_list = []
+                for etf in symbol:
+                    df = self._download_etf_data(etf, start_date, end_date)
+                    if not df.empty:
+                        data = PandasData(dataname=df, ts_code=etf)
+                        data_list.append(data)
+                logger.info(f"成功下载 {len(data_list)} 个ETF数据")
+                return data_list
             
             # 判断市场类型
             if symbol.endswith(('.SH', '.SZ')):  # A股或ETF
@@ -161,4 +173,7 @@ class PandasData(bt.feeds.PandasData):
         """初始化数据源"""
         # 从kwargs中获取ts_code
         self.ts_code = kwargs.pop('ts_code', None)
+        # 确保ts_code被正确设置为params
+        if self.ts_code:
+            self.params.ts_code = self.ts_code
         super().__init__(**kwargs) 

@@ -83,7 +83,6 @@ ETF-Strategies/
 │   ├── data/             # 数据加载模块
 │   ├── strategies/       # 交易策略模块
 │   ├── indicators/       # 技术指标模块
-│   ├── signals/          # 信号数据模块
 │   └── utils/           # 工具函数模块
 └── logs/                # 日志文件目录
 ```

@@ -3,7 +3,7 @@ import os
 import backtrader as bt
 from loguru import logger
 from src.indicators.trailing_stop import TrailingStop
-from src.signals.sentiment_data import get_sentiment_data
+from src.strategies.market_sentiment.sentiment_data import get_sentiment_data
 import math
 import numpy as np
 import pandas as pd

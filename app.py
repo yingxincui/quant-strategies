@@ -80,7 +80,47 @@ def main():
                 st.error("市场情绪策略必须提供Tushare Token")
         else:
             tushare_token = st.text_input("Tushare Token（可选，如不填则使用akshare）", type="password")
-        symbol = st.text_input("ETF代码", value="510050.SH", help="支持：A股(000001.SZ)、ETF(510300.SH)、港股(00700.HK)")
+            
+        # ETF轮动策略的ETF选择
+        if strategy_name == "ETF轮动策略":
+            etf_list = [
+                '510050.SH',  # 上证50ETF
+                '510300.SH',  # 沪深300ETF
+                '510500.SH',  # 中证500ETF
+                '159915.SZ',  # 创业板ETF
+                '512880.SH',  # 证券ETF
+                '512690.SH',  # 酒ETF
+                '512660.SH',  # 军工ETF
+                '512010.SH',  # 医药ETF
+                '512800.SH',  # 银行ETF
+                '512170.SH',  # 医疗ETF
+                '512760.SH',  # 芯片ETF
+                '159928.SZ',  # 消费ETF
+                '512480.SH',  # 半导体ETF
+                '512980.SH',  # 科技ETF
+                '512580.SH',  # 环保ETF
+                '512400.SH',  # 有色金属ETF
+                '512200.SH',  # 地产ETF
+                '516160.SH',  # 新能源车ETF
+                '159939.SZ',  # 信息技术ETF
+                '512600.SH',  # 主要消费ETF
+                '512070.SH',  # 证券保险ETF
+                '159869.SZ',  # 新基建ETF
+                '515030.SH',  # 新能源ETF
+                '515790.SH',  # 光伏ETF
+                '513050.SH',  # 中概互联ETF
+            ]
+            selected_etfs = st.multiselect(
+                "选择ETF",
+                options=etf_list,
+                default=etf_list[:5],  # 默认选择前5个ETF
+                help="选择要轮动的ETF，建议选择3-5个相关性较低的ETF"
+            )
+            if not selected_etfs:
+                st.error("请至少选择一个ETF")
+                return
+        else:
+            symbol = st.text_input("ETF代码", value="510050.SH", help="支持：A股(000001.SZ)、ETF(510300.SH)、港股(00700.HK)")
         
         # 移动平均线参数（仅在选择双均线策略时显示）
         if strategy_name == "双均线策略":
@@ -90,6 +130,16 @@ def main():
                 fast_period = st.number_input("快线周期", value=5, min_value=1)
             with col2:
                 slow_period = st.number_input("慢线周期", value=30, min_value=1)
+        
+        # ETF轮动策略参数
+        if strategy_name == "ETF轮动策略":
+            st.subheader("轮动参数")
+            col1, col2 = st.columns(2)
+            with col1:
+                momentum_period = st.number_input("动量周期", value=20, min_value=1)
+            with col2:
+                rebalance_interval = st.number_input("调仓间隔(天)", value=30, min_value=1)
+            num_positions = st.number_input("持仓数量", value=1, min_value=1, max_value=10)
         
         # 风险控制参数
         st.subheader("风险控制")
@@ -121,9 +171,19 @@ def main():
         with st.spinner("正在进行回测..."):
             try:
                 # 下载数据
-                logger.info(f"开始下载数据 - 股票代码: {symbol}")
+                logger.info(f"开始下载数据 - 股票代码: {selected_etfs if strategy_name == 'ETF轮动策略' else symbol}")
                 data_loader = DataLoader(tushare_token=tushare_token)
-                data = data_loader.download_data(symbol, start_date, end_date)
+                
+                # 根据策略类型下载数据
+                if strategy_name == "ETF轮动策略":
+                    data = data_loader.download_data(selected_etfs, start_date, end_date)
+                    # 打印每个数据源的ETF代码
+                    if isinstance(data, list):
+                        for d in data:
+                            etf_code = d.params.ts_code if hasattr(d, 'params') and hasattr(d.params, 'ts_code') else '未知'
+                            logger.info(f"加载ETF数据源: {etf_code}")
+                else:
+                    data = data_loader.download_data(symbol, start_date, end_date)
                 
                 if data is None:
                     st.error("未获取到数据，请检查股票代码和日期范围")
@@ -149,6 +209,14 @@ def main():
                         'slow_period': slow_period,
                     })
                 
+                # 如果是ETF轮动策略，添加特定参数
+                if strategy_name == "ETF轮动策略":
+                    strategy_params.update({
+                        'momentum_period': momentum_period,
+                        'rebalance_interval': rebalance_interval,
+                        'num_positions': num_positions,
+                    })
+                
                 # 如果是市场情绪策略，添加tushare token
                 if strategy_name == "市场情绪策略":
                     os.environ['TUSHARE_TOKEN'] = tushare_token
@@ -170,6 +238,9 @@ def main():
                 
                 # 显示交易统计
                 trades = results.get('trades', pd.DataFrame())  # 获取交易记录DataFrame
+
+                # 打印交易记录
+                logger.info(f"交易记录: {trades}")
                 
                 # 获取交易统计
                 total_pnl = results.get('total_pnl', 0)  # 使用引擎计算的总盈亏
