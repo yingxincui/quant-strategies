@@ -38,7 +38,7 @@ class DataLoader:
                 for etf in symbol:
                     df = self._download_etf_data(etf, start_date, end_date)
                     if not df.empty:
-                        data = PandasData(dataname=df, ts_code=etf)
+                        data = PandasData(dataname=df, ts_code=etf, fromdate=start_date, todate=end_date)
                         data_list.append(data)
                 logger.info(f"成功下载 {len(data_list)} 个ETF数据")
                 return data_list
@@ -57,13 +57,14 @@ class DataLoader:
             else:
                 raise ValueError(f"不支持的市场类型: {symbol}")
                 
-            logger.info(f"下载数据成功: {symbol}，数据长度: {len(df)}")
-
             if df.empty:
+                logger.warning(f"下载数据为空: {symbol}")
                 return None
                 
-            # 创建PandasData对象并设置股票代码
-            data = PandasData(dataname=df, ts_code=symbol)
+            logger.info(f"下载数据成功: {symbol}，数据长度: {len(df)}, 日期范围: {df.index[0]} 至 {df.index[-1]}")
+
+            # 创建PandasData对象并设置股票代码和时间范围
+            data = PandasData(dataname=df, ts_code=symbol, fromdate=start_date, todate=end_date)
             return data
                 
         except Exception as e:
@@ -116,10 +117,18 @@ class DataLoader:
             # 转换日期格式并设置为索引
             df['date'] = pd.to_datetime(df['date'])
             df = df.set_index('date')
+            df = df.sort_index()  # 确保按日期升序
             
             # 过滤日期范围
-            df = df.loc[start_date:end_date]
+            logger.info(f"过滤日期范围: {start_date} 至 {end_date}")
+            mask = (df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))
+            df = df[mask]
             
+            if df.empty:
+                logger.warning(f"过滤后数据为空 - 股票代码: {symbol}, 日期范围: {start_date} 至 {end_date}")
+                return pd.DataFrame()
+                
+            logger.info(f"过滤后数据长度: {len(df)}, 日期范围: {df.index[0]} 至 {df.index[-1]}")
             return df[['open', 'high', 'low', 'close', 'volume']]
             
         except Exception as e:
@@ -167,13 +176,28 @@ class PandasData(bt.feeds.PandasData):
         ('volume', 'volume'),
         ('openinterest', None),
         ('ts_code', None),  # 股票代码
+        ('fromdate', None),
+        ('todate', None),
     )
     
     def __init__(self, **kwargs):
         """初始化数据源"""
-        # 从kwargs中获取ts_code
+        # 从kwargs中获取ts_code和日期范围
         self.ts_code = kwargs.pop('ts_code', None)
-        # 确保ts_code被正确设置为params
+        self.fromdate = kwargs.pop('fromdate', None)
+        self.todate = kwargs.pop('todate', None)
+        
+        # 确保参数被正确设置
         if self.ts_code:
             self.params.ts_code = self.ts_code
-        super().__init__(**kwargs) 
+        if self.fromdate:
+            self.params.fromdate = self.fromdate
+        if self.todate:
+            self.params.todate = self.todate
+            
+        # 调用父类初始化
+        super().__init__(**kwargs)
+        
+        # 设置数据源的名称
+        if self.ts_code:
+            self._name = self.ts_code 

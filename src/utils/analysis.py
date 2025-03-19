@@ -15,6 +15,20 @@ class Analysis:
         # 计算总收益率
         analysis['total_return'] = (strategy.broker.getvalue() / strategy.broker.startingcash) - 1
         
+        # 计算年化收益率
+        start_date = bt.num2date(strategy.data.datetime[-len(strategy.data.datetime)+1])
+        end_date = bt.num2date(strategy.data.datetime[0])
+        # 确保结束日期是当天的收盘时间
+        end_date = end_date.replace(hour=15, minute=0, second=0, microsecond=0)
+        days = (end_date - start_date).days
+        logger.info(f"回测开始日期: {start_date}, 回测结束日期: {end_date}, 回测天数: {days}，总收益率: {analysis['total_return']}")
+        if days > 0:
+            # 使用252个交易日作为一年
+            years = days / 252
+            analysis['annualized_return'] = (1 + analysis['total_return']) ** (1/years) - 1
+        else:
+            analysis['annualized_return'] = 0
+        
         # 获取夏普比率
         sharpe_analysis = strategy.analyzers.sharpe.get_analysis()
         analysis['sharpe_ratio'] = sharpe_analysis.get('sharperatio', 0) or 0

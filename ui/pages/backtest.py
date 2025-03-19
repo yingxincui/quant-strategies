@@ -5,6 +5,7 @@ from src.data.data_loader import DataLoader
 from src.utils.backtest_engine import BacktestEngine
 from src.utils.logger import setup_logger
 import os
+import plotly.graph_objects as go
 
 logger = setup_logger()
 
@@ -19,7 +20,7 @@ def render_backtest(params):
         with st.spinner("正在进行回测..."):
             try:
                 # 下载数据
-                logger.info(f"开始下载数据 - 股票代码: {params['selected_etfs'] if params['strategy_name'] == 'ETF轮动策略' else params['symbol']}")
+                logger.info(f"开始下载数据 - 股票代码: {params['selected_etfs'] if params['strategy_name'] == 'ETF轮动策略' else params['symbol']}, 开始日期: {params['start_date']}, 结束日期: {params['end_date']}")
                 data_loader = DataLoader(tushare_token=params['tushare_token'])
                 
                 # 根据策略类型下载数据
@@ -60,9 +61,16 @@ def render_backtest(params):
                 # 如果是ETF轮动策略，添加特定参数
                 if params['strategy_name'] == "ETF轮动策略":
                     strategy_params.update({
-                        'momentum_period': params['momentum_period'],
+                        'momentum_short': params['momentum_short'],
+                        'momentum_long': params['momentum_long'],
                         'rebalance_interval': params['rebalance_interval'],
                         'num_positions': params['num_positions'],
+                        'profit_target1': params['profit_target1'],
+                        'profit_target2': params['profit_target2'],
+                        'market_trend_threshold': params['market_trend_threshold'],
+                        'vix_threshold': params['vix_threshold'],
+                        'momentum_decay': params['momentum_decay'],
+                        'atr_multiplier': params['atr_multiplier'],
                     })
                 
                 # 如果是市场情绪策略，添加tushare token
@@ -107,9 +115,17 @@ def render_backtest(params):
                 with col1:
                     st.metric("总收益率", f"{results['total_return']:.2%}")
                 with col2:
-                    st.metric("夏普比率", f"{results['sharpe_ratio']:.2f}")
+                    st.metric("年化收益率", f"{results['annualized_return']:.2%}")
                 with col3:
+                    st.metric("夏普比率", f"{results['sharpe_ratio']:.2f}")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
                     st.metric("最大回撤", f"{results['max_drawdown']:.2%}")
+                with col2:
+                    st.metric("胜率", f"{results['win_rate']:.2%}")
+                with col3:
+                    st.metric("盈亏比", f"{results['profit_factor']:.2f}")
                 
                 # 显示交易记录
                 st.subheader("交易记录")
@@ -138,6 +154,41 @@ def render_backtest(params):
                 
                 # 绘制回测图表
                 st.subheader("回测结果图表")
+
+                # 添加总资产变化图表
+                if not trades.empty:                    
+                    # 从交易记录中获取总资产数据
+                    trades['交易时间'] = pd.to_datetime(trades['交易时间'])
+                    trades['总资产'] = pd.to_numeric(trades['总资产'], errors='coerce')
+                    
+                    # 创建图表
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=trades['交易时间'],
+                        y=trades['总资产'],
+                        mode='lines',
+                        name='总资产',
+                        line=dict(color='blue')
+                    ))
+                    
+                    # 更新布局
+                    fig.update_layout(
+                        title='总资产变化',
+                        xaxis_title='日期',
+                        yaxis_title='总资产',
+                        hovermode='x unified',
+                        # 设置y轴格式为完整数字
+                        yaxis=dict(
+                            tickformat='.0f'
+                        ),
+                        # 设置x轴格式为中文日期
+                        xaxis=dict(
+                            tickformat='%Y年%m月%d日'
+                        )
+                    )
+                    
+                    # 显示图表
+                    st.plotly_chart(fig, use_container_width=True)
                 
                 # 使用新的Plotly可视化
                 fig = engine.plot()

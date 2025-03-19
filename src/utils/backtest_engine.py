@@ -6,29 +6,12 @@ from .analysis import Analysis
 from .plot import Plot
 import sys
 
-class AShareCommissionInfo(bt.CommInfoBase):
-    """A股交易费用"""
-    params = (
-        ('commission', 0.00025),     # 佣金费率 0.025%
-        ('stocklike', True),        # 股票模式
-        ('commtype', bt.CommInfoBase.COMM_PERC),  # 按百分比收取
-    )
-
-    def _getcommission(self, size, price, pseudoexec):
-        """计算交易费用"""
-        value = abs(size) * price
-        
-        # 计算佣金（买入和卖出都收取）
-        commission = value * self.p.commission
-        
-        return commission
-
 class BacktestEngine:
     def __init__(self, strategy_class, data_feed, cash=100000.0, commission=0.00025, strategy_params=None):
         """初始化回测引擎"""
         self.cerebro = bt.Cerebro()
         self.cerebro.broker.setcash(cash)
-        self.cerebro.broker.setcommission(commission=commission)
+        self.cerebro.broker.setcommission(commission=commission)        
         
         # 添加数据源
         try:
@@ -79,6 +62,7 @@ class BacktestEngine:
         
         logger.info("=== 回测统计 ===")
         logger.info(f"总收益率: {analysis['total_return']:.2%}")
+        logger.info(f"年化收益率: {analysis['annualized_return']:.2%}")
         logger.info(f"夏普比率: {analysis['sharpe_ratio']:.2f}")
         logger.info(f"最大回撤: {analysis['max_drawdown']:.2%}")
         logger.info(f"胜率: {analysis['win_rate']:.2%}")
@@ -95,5 +79,4 @@ class BacktestEngine:
     def _get_analysis(self, strategy):
         """获取回测分析结果"""
         analysis = Analysis()._get_analysis(self, strategy)
-        logger.info(analysis)
         return analysis 

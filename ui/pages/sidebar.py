@@ -79,10 +79,34 @@ def render_sidebar():
             st.subheader("轮动参数")
             col1, col2 = st.columns(2)
             with col1:
-                momentum_period = st.number_input("动量周期", value=20, min_value=1)
+                momentum_short = st.number_input("短期动量周期", value=10, min_value=1)
             with col2:
-                rebalance_interval = st.number_input("调仓间隔(天)", value=30, min_value=1)
-            num_positions = st.number_input("持仓数量", value=1, min_value=1, max_value=10)
+                momentum_long = st.number_input("长期动量周期", value=60, min_value=1)
+            col1, col2 = st.columns(2)
+            with col1:
+                rebalance_interval = st.number_input("调仓间隔(天)", value=20, min_value=1)
+            with col2:
+                num_positions = st.number_input("持仓数量", value=3, min_value=1, max_value=10)
+            
+            # 止盈止损参数
+            st.subheader("止盈止损参数")
+            col1, col2 = st.columns(2)
+            with col1:
+                profit_target1 = st.number_input("第一止盈目标(%)", value=5.0, min_value=1.0, max_value=100.0, step=1.0)
+            with col2:
+                profit_target2 = st.number_input("第二止盈目标(%)", value=10.0, min_value=1.0, max_value=100.0, step=1.0)
+            
+            # 市场状态参数
+            st.subheader("市场状态参数")
+            col1, col2 = st.columns(2)
+            with col1:
+                market_trend_threshold = st.number_input("市场趋势阈值(%)", value=-5.0, min_value=-20.0, max_value=0.0, step=1.0)
+            with col2:
+                vix_threshold = st.number_input("波动率阈值(%)", value=3.0, min_value=1.0, max_value=10.0, step=0.5)
+            
+            # 动量衰减参数
+            momentum_decay = st.slider("动量衰减阈值(%)", 10.0, 50.0, 30.0, 1.0)
+            atr_multiplier = st.slider("ATR倍数", 1.0, 3.0, 2.0, 0.1)
         
         # 风险控制参数
         st.subheader("风险控制")
@@ -112,9 +136,16 @@ def render_sidebar():
             'symbol': symbol if strategy_name != "ETF轮动策略" else None,
             'fast_period': fast_period if strategy_name == "双均线策略" else None,
             'slow_period': slow_period if strategy_name == "双均线策略" else None,
-            'momentum_period': momentum_period if strategy_name == "ETF轮动策略" else None,
+            'momentum_short': momentum_short if strategy_name == "ETF轮动策略" else None,
+            'momentum_long': momentum_long if strategy_name == "ETF轮动策略" else None,
             'rebalance_interval': rebalance_interval if strategy_name == "ETF轮动策略" else None,
             'num_positions': num_positions if strategy_name == "ETF轮动策略" else None,
+            'profit_target1': profit_target1 / 100 if strategy_name == "ETF轮动策略" else None,
+            'profit_target2': profit_target2 / 100 if strategy_name == "ETF轮动策略" else None,
+            'market_trend_threshold': market_trend_threshold / 100 if strategy_name == "ETF轮动策略" else None,
+            'vix_threshold': vix_threshold / 100 if strategy_name == "ETF轮动策略" else None,
+            'momentum_decay': momentum_decay / 100 if strategy_name == "ETF轮动策略" else None,
+            'atr_multiplier': atr_multiplier if strategy_name == "ETF轮动策略" else None,
             'trail_percent': trail_percent,
             'risk_ratio': risk_ratio,
             'max_drawdown': max_drawdown,

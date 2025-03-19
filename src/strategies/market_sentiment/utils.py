@@ -56,34 +56,37 @@ class TrendStateDetector:
         return current_regime
 
 class PositionManager:
-    def __init__(self, max_risk=0.2):
+    def __init__(self, max_risk=0.45):
         self.max_risk = max_risk
         
     def adjust_position(self, target_ratio, volatility):
         """简化的仓位管理，只根据波动率调整仓位"""
-        # 波动率调整系数
-        vol_adj = np.clip(volatility / 25, 0.5, 1.5)
+        # 波动率调整系数 - 这里的2是百分比形式的波动率基准值(2%)
+        # 实际波动率通常在1%~3%之间
+        vol_adj = np.clip(volatility / 2, 0.5, 1.5)
         
         # 根据波动率调整目标仓位
         adjusted_ratio = target_ratio * vol_adj
         
         # 设置风险上限
-        if adjusted_ratio > self.max_risk * 2:  # 最大允许仓位40%
+        if adjusted_ratio > self.max_risk * 2:  # 最大允许仓位90%
             adjusted_ratio = self.max_risk * 2
+        
+        logger.info(f"波动率: {volatility:.2f}, 波动率调整系数: {vol_adj:.2f}, 目标仓位: {target_ratio:.2f}, 调整后仓位: {adjusted_ratio:.2f}")
             
         return adjusted_ratio
 
 # 信号生成参数
 SENTIMENT_THRESHOLDS = {
     'core': 2.5,      # 核心信号阈值
-    'secondary': 10.0,  # 次级信号阈值
-    'light': 15.0     # 轻仓信号阈值
+    'secondary': 20.0,  # 次级信号阈值
+    'light': 22.0     # 轻仓信号阈值
 }
 
 POSITION_WEIGHTS = {
-    'core': 0.5,      # 核心信号仓位
-    'secondary': 0.3,  # 次级信号仓位
-    'light': 0.1      # 轻仓信号仓位
+    'core': 0.95,      # 核心信号仓位
+    'secondary': 0.9,  # 次级信号仓位
+    'light': 0.8      # 轻仓信号仓位
 }
 
 def generate_signals(sentiment_score, regime, volatility):
@@ -92,7 +95,11 @@ def generate_signals(sentiment_score, regime, volatility):
     
     # 下跌趋势不开仓
     if regime == 'downtrend':
-        return []
+        if sentiment_score < SENTIMENT_THRESHOLDS['core']:
+            signals.append({'type': 'buy', 'weight': POSITION_WEIGHTS['core']})  # 核心信号
+            return signals
+        else:
+            return []
     
     # 其他情况根据情绪分数决定
     if sentiment_score < SENTIMENT_THRESHOLDS['core']:
