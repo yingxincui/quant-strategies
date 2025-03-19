@@ -1,0 +1,19 @@
+[theme]
+backgroundColor="#ffffff"
+textColor="#262730"
+font="sans serif"
+
+[server]
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+fastRerenderThreshold = 1000
+
+[client]
+showErrorDetails = true
+
+[runner.magic]
+fastRerenderThreshold = 1000

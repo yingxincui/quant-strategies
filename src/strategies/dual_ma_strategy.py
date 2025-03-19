@@ -14,6 +14,28 @@ class DualMAStrategy(bt.Strategy):
     )
 
     def __init__(self):
+        # 获取ETF代码
+        self.etf_code = None
+        try:
+            # 首先尝试从数据源的params属性获取
+            if hasattr(self.data, 'params') and hasattr(self.data.params, 'ts_code'):
+                self.etf_code = self.data.params.ts_code
+            # 然后尝试从数据源的其他属性获取
+            elif hasattr(self.data, 'ts_code'):
+                self.etf_code = self.data.ts_code
+            # 最后尝试从数据源的_name属性获取
+            elif hasattr(self.data, '_name'):
+                self.etf_code = self.data._name
+        except Exception as e:
+            logger.warning(f"获取ETF代码时出错: {str(e)}")
+            
+        # 如果没有找到ETF代码，使用默认名称
+        if not self.etf_code:
+            self.etf_code = "ETF_1"
+            
+        # 设置数据源的名称
+        self.data._name = self.etf_code
+        
         # 移动平均线指标
         self.fast_ma = bt.indicators.SMA(
             self.data.close, period=self.p.fast_period)
@@ -169,7 +191,9 @@ class DualMAStrategy(bt.Strategy):
                 order.info = {
                     'reason': self.trade_reason,
                     'total_value': self.broker.getvalue(),  # 记录总资产（含现金）
-                    'position_value': self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
+                    'position_value': self.position.size * order.executed.price if self.position else 0,  # 记录持仓市值
+                    'etf_code': self.etf_code,  # 添加ETF代码
+                    'execution_date': self.data.datetime.date(0)  # 添加执行日期
                 }
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(
@@ -184,7 +208,9 @@ class DualMAStrategy(bt.Strategy):
                 order.info = {
                     'reason': self.trade_reason,
                     'total_value': self.broker.getvalue(),  # 记录总资产（含现金）
-                    'position_value': self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
+                    'position_value': self.position.size * order.executed.price if self.position else 0,  # 记录持仓市值
+                    'etf_code': self.etf_code,  # 添加ETF代码
+                    'execution_date': self.data.datetime.date(0)  # 添加执行日期
                 }
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(

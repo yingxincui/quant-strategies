@@ -108,6 +108,7 @@ class ETFTradingEnv(gym.Env):
         self.date_memory = [self._get_date()]
         self.trades = []
         self.rewards_memory = []
+        self.total_dividend = 0  # 添加分红总额跟踪
         
         # 随机数生成器
         self.seed()
@@ -141,6 +142,7 @@ class ETFTradingEnv(gym.Env):
         self.date_memory = [self._get_date()]
         self.trades = []
         self.rewards_memory = []
+        self.total_dividend = 0  # 重置分红总额
         
         # 初始化持仓和现金
         self.holdings = np.zeros(self.stock_dim)
@@ -523,5 +525,5 @@ class ETFTradingEnv(gym.Env):
             'final_value': df_asset['portfolio_value'].iloc[-1],
             'initial_value': df_asset['portfolio_value'].iloc[0],
             'total_trades': len(self.trades),
-            'total_cost': self.cost
+            'total_dividend': self.total_dividend  # 更新为分红总额
         }

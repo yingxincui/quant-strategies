@@ -10,7 +10,8 @@ class ETFRotationStrategy(bt.Strategy):
         ('num_positions', 1),     # 持有前N个ETF
         ('risk_ratio', 0.02),     # 单次交易风险比率
         ('max_drawdown', 0.15),   # 最大回撤限制
-        ('trail_percent', 1.5),   # 追踪止损百分比
+        ('trail_percent', 2.5),   # 追踪止损百分比，从1.5%提高到2.5%
+        ('min_hold_days', 5),     # 最小持仓天数
         ('verbose', True),
     )
 
@@ -79,6 +80,8 @@ class ETFRotationStrategy(bt.Strategy):
         logger.info(f"ETF轮换策略初始化完成 - 参数: 动量周期={self.p.momentum_period}, 调仓间隔={self.p.rebalance_interval}天, "
                   f"持仓数量={self.p.num_positions}, 风险比例={self.p.risk_ratio:.2%}, 追踪止损={self.p.trail_percent}%")
         logger.info(f"加载的ETF列表: {[d._name for d in self.datas]}")
+        
+        self.entry_dates = {}  # 记录每个ETF的买入日期
 
     def log(self, txt, dt=None):
         """日志功能"""
@@ -188,12 +191,20 @@ class ETFRotationStrategy(bt.Strategy):
                     self.trade_reasons[d] = f"动量排名第{top_etfs.index(d)+1}，信号强度: {self.inds[d][0]:.2f}"
                     self.log(f'买入 {d._name} - 动量排名第{top_etfs.index(d)+1}，信号强度: {self.inds[d][0]:.2f}, 数量: {size}')
                     self.bought_etfs.append(d)
+                    # 记录买入日期
+                    self.entry_dates[d] = self.data.datetime.date(0)
 
     def _check_trailing_stop(self):
         """检查追踪止损"""
         for d in self.datas:
             position = self.getposition(d)
             if position.size > 0:
+                # 检查最小持仓时间
+                if d in self.entry_dates:
+                    hold_days = (self.data.datetime.date(0) - self.entry_dates[d]).days
+                    if hold_days < self.p.min_hold_days:
+                        continue
+                
                 # 获取当前价格和入场价格
                 current_price = d.close[0]
                 entry_price = position.price
@@ -221,6 +232,9 @@ class ETFRotationStrategy(bt.Strategy):
                     # 从已购买ETF列表中移除
                     if d in self.bought_etfs:
                         self.bought_etfs.remove(d)
+                    # 清除买入日期记录
+                    if d in self.entry_dates:
+                        del self.entry_dates[d]
 
     def _time_to_rebalance(self):
         # 按时间间隔调仓
@@ -258,12 +272,16 @@ class ETFRotationStrategy(bt.Strategy):
                 # 获取ETF代码
                 etf_code = self.etf_codes.get(d, d._name)
                 
+                # 获取订单执行时的实际日期
+                order_date = self.data.datetime.date(0)  # 使用当前数据时间作为订单执行时间
+                
                 # 添加总资产和持仓市值信息
                 order.info = {
                     'reason': self.trade_reasons.get(d, "未记录"),
                     'total_value': self.broker.getvalue(),
-                    'position_value': total_position_value,  # 使用所有ETF的总持仓市值
-                    'etf_code': etf_code  # 添加ETF代码
+                    'position_value': total_position_value,
+                    'etf_code': etf_code,
+                    'execution_date': order_date  # 添加执行日期
                 }
                 
                 # 将订单添加到订单列表中
@@ -272,11 +290,13 @@ class ETFRotationStrategy(bt.Strategy):
                 if order.isbuy():
                     self.log(f'{etf_code} 买入完成 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
                            f'佣金: {order.executed.comm:.2f}, 原因: {self.trade_reasons.get(d, "未记录")}, '
-                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}')
+                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}',
+                           dt=order_date)  # 使用订单执行日期
                 else:
                     self.log(f'{etf_code} 卖出完成 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
                            f'佣金: {order.executed.comm:.2f}, 原因: {self.trade_reasons.get(d, "未记录")}, '
-                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}')
+                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}',
+                           dt=order_date)  # 使用订单执行日期
                     
                     # 如果是卖出操作，从最高价记录中移除该ETF
                     if hasattr(self, 'max_prices') and d in self.max_prices:
@@ -306,12 +326,16 @@ class ETFRotationStrategy(bt.Strategy):
                     for data in self.datas
                 )
                 
+                # 获取订单执行时的实际日期
+                order_date = self.data.datetime.date(0)  # 使用当前数据时间作为订单执行时间
+                
                 # 添加总资产和持仓市值信息
                 order.info = {
                     'reason': self.trade_reasons.get(d, "未记录"),
                     'total_value': self.broker.getvalue(),
                     'position_value': total_position_value,
-                    'etf_code': etf_code
+                    'etf_code': etf_code,
+                    'execution_date': order_date  # 添加执行日期
                 }
                 
                 # 将订单添加到订单列表中
@@ -320,11 +344,13 @@ class ETFRotationStrategy(bt.Strategy):
                 if order.isbuy():
                     self.log(f'{etf_code} 买入完成 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
                            f'佣金: {order.executed.comm:.2f}, 原因: {self.trade_reasons.get(d, "未记录")}, '
-                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}')
+                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}',
+                           dt=order_date)  # 使用订单执行日期
                 else:
                     self.log(f'{etf_code} 卖出完成 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
                            f'佣金: {order.executed.comm:.2f}, 原因: {self.trade_reasons.get(d, "未记录")}, '
-                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}')
+                           f'总资产: {self.broker.getvalue():.2f}, 持仓市值: {total_position_value:.2f}',
+                           dt=order_date)  # 使用订单执行日期
                     
                     # 如果是卖出操作，从最高价记录中移除该ETF
                     if hasattr(self, 'max_prices') and d in self.max_prices:

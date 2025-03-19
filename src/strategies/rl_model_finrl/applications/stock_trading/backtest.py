@@ -283,7 +283,7 @@ def backtest_etf_strategy(
             f.write(f"最大回撤: {final_stats['max_drawdown']*100:.2f}%\n")
             f.write(f"胜率: {final_stats['win_rate']*100:.2f}%\n")
             f.write(f"交易次数: {final_stats['total_trades']}\n")
-            f.write(f"总交易成本: ${final_stats['total_cost']:.2f}\n")
+            f.write(f"分红总额: ${final_stats['total_dividend']:.2f}\n")
             
             if 'information_ratio' in final_stats:
                 f.write(f"信息比率: {final_stats['information_ratio']:.4f}\n")

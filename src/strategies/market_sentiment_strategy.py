@@ -58,18 +58,35 @@ class MarketSentimentStrategy(bt.Strategy):
         # 获取数据源
         self.data = self.datas[0]
         
-        # 获取股票代码
-        ts_code = getattr(self.data, 'ts_code', None)
-        if not ts_code and hasattr(self.data, 'params'):
-            ts_code = getattr(self.data.params, 'ts_code', None)
+        # 获取ETF代码
+        self.etf_code = None
+        try:
+            # 首先尝试从数据源的params属性获取
+            if hasattr(self.data, 'params') and hasattr(self.data.params, 'ts_code'):
+                self.etf_code = self.data.params.ts_code
+            # 然后尝试从数据源的其他属性获取
+            elif hasattr(self.data, 'ts_code'):
+                self.etf_code = self.data.ts_code
+            # 最后尝试从数据源的_name属性获取
+            elif hasattr(self.data, '_name'):
+                self.etf_code = self.data._name
+        except Exception as e:
+            logger.warning(f"获取ETF代码时出错: {str(e)}")
             
-        logger.info(f"初始化分红处理器 - 股票代码: {ts_code}, 回测区间: {self.data.datetime.date(0)} 至 {self.data.datetime.date(-1)}")
+        # 如果没有找到ETF代码，使用默认名称
+        if not self.etf_code:
+            self.etf_code = "ETF_1"
+            
+        # 设置数据源的名称
+        self.data._name = self.etf_code
+        
+        logger.info(f"初始化分红处理器 - 股票代码: {self.etf_code}, 回测区间: {self.data.datetime.date(0)} 至 {self.data.datetime.date(-1)}")
         
         # 初始化分红处理器
         self.dividend_handler = None
         if self.p.handle_dividend:
-            if ts_code:
-                self.dividend_handler = ETFDividendHandler(ts_code=ts_code)
+            if self.etf_code:
+                self.dividend_handler = ETFDividendHandler(ts_code=self.etf_code)
                 self.dividend_handler.update_dividend_data(start_date=self.data.datetime.date(0), end_date=self.data.datetime.date(-1))
             else:
                 logger.warning("无法获取股票代码，分红处理功能将不可用")
@@ -631,6 +648,8 @@ class MarketSentimentStrategy(bt.Strategy):
                 order.info['position_value'] = self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
                 order.info['position_ratio'] = self.current_position_ratio  # 记录持仓比例
                 order.info['avg_cost'] = self.avg_cost  # 记录平均成本
+                order.info['etf_code'] = self.etf_code  # 添加ETF代码
+                order.info['execution_date'] = self.data.datetime.date(0)  # 添加执行日期
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(f'买入执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
                           f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {self.avg_cost:.2f}, 原因: {self.trade_reason}')
@@ -653,6 +672,8 @@ class MarketSentimentStrategy(bt.Strategy):
                 order.info['position_ratio'] = self.current_position_ratio  # 记录持仓比例
                 if self.avg_cost is not None:
                     order.info['avg_cost'] = self.avg_cost  # 记录平均成本
+                order.info['etf_code'] = self.etf_code  # 添加ETF代码
+                order.info['execution_date'] = self.data.datetime.date(0)  # 添加执行日期
                 self._orders.append(order)  # 添加到订单列表
                 logger.info(f'卖出执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
                           f'仓位比例: {self.current_position_ratio:.2%}, 原因: {self.trade_reason}')
