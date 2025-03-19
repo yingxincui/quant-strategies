@@ -38,11 +38,11 @@ performance = backtest_etf_strategy(
 from src.strategies.rl_model_finrl.applications.stock_trading.etf_env import ETFTradingEnv
 from src.strategies.rl_model_finrl.applications.stock_trading.run_strategy import run_etf_strategy
 from src.strategies.rl_model_finrl.applications.stock_trading.backtest import backtest_etf_strategy
-from src.strategies.rl_model_finrl.applications.stock_trading.analysis import analyze_performance
+from src.strategies.rl_model_finrl.applications.stock_trading.analysis import ETFStrategyAnalyzer
 
 __all__ = [
     'ETFTradingEnv',
     'run_etf_strategy',
     'backtest_etf_strategy',
-    'analyze_performance'
+    'ETFStrategyAnalyzer'
 ] 

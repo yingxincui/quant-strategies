@@ -5,7 +5,8 @@ import torch
 from loguru import logger
 from src.strategies.rl_model_finrl.agents.elegantrl.ppo_agent import PPOAgent
 from src.strategies.rl_model_finrl.meta.data_processors import DataProcessor
-from src.strategies.rl_model_finrl.config import Config
+import json
+from src.strategies.rl_model_finrl.agents.stablebaseline3 import DQNAgent
 
 class RLModelStrategy(bt.Strategy):
     params = (
@@ -22,7 +23,6 @@ class RLModelStrategy(bt.Strategy):
     def __init__(self):
         """初始化策略"""
         # 加载配置和模型
-        self.config = Config()
         if self.p.config_path:
             with open(self.p.config_path, 'r') as f:
                 config_dict = json.load(f)

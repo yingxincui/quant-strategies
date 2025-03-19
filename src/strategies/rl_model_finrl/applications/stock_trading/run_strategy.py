@@ -20,10 +20,10 @@ from src.strategies.rl_model_finrl.config import (
     TURBULENCE_THRESHOLD,
     TRAIN_START_DATE,
     TRAIN_END_DATE,
-    TRADE_START_DATE,
-    TRADE_END_DATE,
+    TEST_START_DATE,
+    TEST_END_DATE,
     TECHNICAL_INDICATORS_LIST,
-    ETF_LIST,
+    TICKER_LIST,
     MODEL_SAVE_PATH,
     NUM_EPISODES,
     TENSORBOARD_LOG_PATH
@@ -72,7 +72,7 @@ def prepare_etf_data(
     """
     # 如果没有提供ETF列表，使用默认列表
     if not ticker_list:
-        ticker_list = ETF_LIST
+        ticker_list = TICKER_LIST
     
     # 获取原始数据
     df = processor.download_data(
@@ -155,7 +155,7 @@ def run_etf_strategy(
     logger.info(f"准备ETF数据: {start_date} 到 {end_date}")
     df = prepare_etf_data(
         processor=processor,
-        ticker_list=ticker_list or ETF_LIST,
+        ticker_list=ticker_list or TICKER_LIST,
         start_date=start_date,
         end_date=end_date,
         data_source=data_source
@@ -349,7 +349,7 @@ if __name__ == "__main__":
     model = run_etf_strategy(
         start_date=TRAIN_START_DATE,
         end_date=TRAIN_END_DATE,
-        ticker_list=ETF_LIST,
+        ticker_list=TICKER_LIST,
         agent="ppo",
         model_name="ppo_etf_demo",
         num_episodes=NUM_EPISODES

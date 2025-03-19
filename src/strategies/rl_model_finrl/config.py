@@ -30,9 +30,10 @@ TECHNICAL_INDICATORS_LIST = [
     "momentum_30",
 ]  # 技术指标列表
 INDICATORS_NORMALIZE = True  # 是否标准化指标
+TURBULENCE_THRESHOLD = 0.01  # 波动性阈值
 
 # 交易环境配置
-INITIAL_BALANCE = 1000000.0  # 初始资金
+INITIAL_AMOUNT = 1000000.0  # 初始资金
 TRANSACTION_COST_PCT = 0.0003  # 交易成本百分比，ETF一般费率更低
 MAX_POSITION_PCT = 0.3  # 单个ETF最大仓位
 REWARD_SCALING = 1e-3  # 奖励缩放系数
@@ -65,9 +66,10 @@ EPSILON_DECAY = 1000  # 探索率衰减系数
 # 路径配置
 DATA_SAVE_PATH = "data"
 MODEL_SAVE_PATH = "models"
-RESULTS_SAVE_PATH = "results"
+RESULTS_PATH = "results"
 TENSORBOARD_PATH = "runs"
+TENSORBOARD_LOG_PATH = "runs/tensorboard"
 
 # 创建必要的目录
-for path in [DATA_SAVE_PATH, MODEL_SAVE_PATH, RESULTS_SAVE_PATH, TENSORBOARD_PATH]:
+for path in [DATA_SAVE_PATH, MODEL_SAVE_PATH, RESULTS_PATH, TENSORBOARD_PATH]:
     os.makedirs(path, exist_ok=True) 

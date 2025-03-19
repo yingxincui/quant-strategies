@@ -14,10 +14,10 @@ from src.strategies.rl_model_finrl.applications.stock_trading.etf_env import ETF
 from src.strategies.rl_model_finrl.applications.stock_trading.run_strategy import prepare_etf_data
 
 from src.strategies.rl_model_finrl.config import (
-    TRADE_START_DATE,
-    TRADE_END_DATE,
+    TEST_START_DATE,
+    TEST_END_DATE,
     TECHNICAL_INDICATORS_LIST,
-    ETF_LIST,
+    TICKER_LIST,
     INITIAL_AMOUNT,
     TRANSACTION_COST_PCT,
     MODEL_SAVE_PATH,
@@ -27,8 +27,8 @@ from src.strategies.rl_model_finrl.config import (
 
 def backtest_etf_strategy(
     model: Any,
-    test_start: str = TRADE_START_DATE,
-    test_end: str = TRADE_END_DATE,
+    test_start: str = TEST_START_DATE,
+    test_end: str = TEST_END_DATE,
     ticker_list: List[str] = None,
     data_source: str = "tushare",
     time_interval: str = "1d",
@@ -71,7 +71,7 @@ def backtest_etf_strategy(
     
     # 如果未提供ETF列表，使用默认列表
     if ticker_list is None:
-        ticker_list = ETF_LIST
+        ticker_list = TICKER_LIST
     
     # 确保结果目录存在
     if not os.path.exists(RESULTS_PATH):
@@ -296,8 +296,8 @@ def backtest_etf_strategy(
 
 def evaluation_comparison(
     models: Dict[str, Any],
-    test_start: str = TRADE_START_DATE,
-    test_end: str = TRADE_END_DATE,
+    test_start: str = TEST_START_DATE,
+    test_end: str = TEST_END_DATE,
     ticker_list: List[str] = None,
     data_source: str = "tushare",
     initial_amount: float = INITIAL_AMOUNT,
@@ -425,9 +425,9 @@ if __name__ == "__main__":
     # 执行回测
     result = backtest_etf_strategy(
         model=model,
-        test_start=TRADE_START_DATE,
-        test_end=TRADE_END_DATE,
-        ticker_list=ETF_LIST,
+        test_start=TEST_START_DATE,
+        test_end=TEST_END_DATE,
+        ticker_list=TICKER_LIST,
         render=True,
         save_result=True
     ) 
