@@ -8,8 +8,8 @@ class TrendStateDetector:
         self.last_regime = None  # 记录上一次的市场状态
         self.regime_change_date = None  # 记录状态变化的日期
         
-    def detect(self, price_series, volume_series, rsi_series, current_date=None):
-        """简化的市场状态检测，重点识别下跌趋势"""
+    def detect(self, price_series, volume_series, current_date=None):
+        """增强的市场状态检测，加入价格通道和成交量异动检测"""
         # 价格通道突破（3个月窗口）
         ma60 = pd.Series(price_series).rolling(60).mean()
         price_ratio = (price_series - ma60) / ma60
@@ -26,24 +26,49 @@ class TrendStateDetector:
         if len(price_series) >= 20:
             ma20 = pd.Series(price_series).rolling(20).mean()
             if len(ma20) >= 10 and not pd.isna(ma20.iloc[-10]) and not pd.isna(ma20.iloc[-1]):
-                # 如果最近10天的移动平均线向下，判定为下跌趋势的一个条件
+                downtrend_signals = 0
+                uptrend_signals = 0
+                
+                # 短期均线方向
                 if ma20.iloc[-1] < ma20.iloc[-10]:
-                    downtrend_signals = 1
-                else:
-                    downtrend_signals = 0
-                    
-                # 检查2: 价格低于长期均线
-                if not pd.isna(ma60.iloc[-1]) and price_series[-1] < ma60.iloc[-1]:
                     downtrend_signals += 1
+                else:
+                    uptrend_signals += 1
+                    
+                # 检查2: 价格相对长期均线位置
+                if not pd.isna(ma60.iloc[-1]):
+                    if price_series[-1] < ma60.iloc[-1]:
+                        downtrend_signals += 1
+                    else:
+                        uptrend_signals += 1
                 
                 # 检查3: 长期均线向下
                 if len(ma60) >= 10 and not pd.isna(ma60.iloc[-10]) and not pd.isna(ma60.iloc[-1]):
                     if ma60.iloc[-1] < ma60.iloc[-10]:
                         downtrend_signals += 1
+                    else:
+                        uptrend_signals += 1
                 
-                # 如果至少满足2个条件，判定为下跌趋势
-                if downtrend_signals >= 2:
+                # 检查4: 价格通道突破
+                if not pd.isna(price_ratio.iloc[-1]):
+                    if price_ratio.iloc[-1] < -0.02:  # 价格显著低于均线
+                        downtrend_signals += 1
+                    elif price_ratio.iloc[-1] > 0.02:  # 价格显著高于均线
+                        uptrend_signals += 1
+                
+                # 检查5: 成交量异动
+                if not pd.isna(vol_zscore.iloc[-1]):
+                    if vol_zscore.iloc[-1] > 2 and price_series[-1] < price_series[-2]:  # 放量下跌
+                        downtrend_signals += 1
+                    elif vol_zscore.iloc[-1] > 2 and price_series[-1] > price_series[-2]:  # 放量上涨
+                        uptrend_signals += 1
+                
+                # 趋势判断逻辑
+                if downtrend_signals >= 3:
                     current_regime = 'downtrend'
+                elif self.last_regime == 'downtrend' and uptrend_signals >= 2:
+                    # 当处于下跌趋势时，只需要较少的上涨信号就可以转为正常状态
+                    current_regime = 'normal'
         
         # 检测趋势变化并记录
         if self.last_regime != current_regime:

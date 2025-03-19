@@ -6,11 +6,161 @@ from src.utils.backtest_engine import BacktestEngine
 from src.utils.logger import setup_logger
 import os
 import plotly.graph_objects as go
+import tushare as ts
+from datetime import datetime, timedelta
 
 logger = setup_logger()
 
 def render_backtest(params):
     """渲染回测界面"""
+    # 如果是市场情绪策略，显示沪深300筛选按钮
+    if params['strategy_name'] == "市场情绪策略":
+        if st.button("沪深300成分股筛选", type="secondary"):
+            if not params['tushare_token']:
+                st.error("沪深300成分股筛选需要提供Tushare Token")
+                return
+                
+            with st.spinner("正在进行沪深300成分股筛选..."):
+                try:
+                    # 初始化Tushare
+                    ts.set_token(params['tushare_token'])
+                    pro = ts.pro_api()
+                    
+                    # 获取沪深300成分股列表
+                    today = datetime.now().strftime('%Y%m%d')
+                    csi300 = pro.index_weight(index_code='399300.SZ', trade_date=today)
+                    if csi300.empty:
+                        # 如果当天数据不可用，尝试获取最近的数据
+                        dates = pro.trade_cal(exchange='', start_date=(datetime.now() - timedelta(days=30)).strftime('%Y%m%d'), 
+                                           end_date=today, is_open='1')
+                        for date in sorted(dates['cal_date'].tolist(), reverse=True):
+                            csi300 = pro.index_weight(index_code='399300.SZ', trade_date=date)
+                            if not csi300.empty:
+                                break
+                    
+                    if csi300.empty:
+                        st.error("未获取到沪深300成分股列表")
+                        return
+                        
+                    # 获取成分股的基本信息
+                    stocks = pro.stock_basic(exchange='', list_status='L')
+                    csi300_stocks = stocks[stocks['ts_code'].isin(csi300['con_code'])]
+                    
+                    if csi300_stocks.empty:
+                        st.error("未获取到成分股信息")
+                        return
+                        
+                    # 创建进度条
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # 存储筛选结果
+                    positive_stocks = []
+                    total_stocks = len(csi300_stocks)
+                    
+                    # 遍历每只股票进行回测
+                    for idx, row in csi300_stocks.iterrows():
+                        # 更新进度（确保不超过1.0）
+                        progress = min(1.0, (idx + 1) / total_stocks)
+                        progress_bar.progress(progress)
+                        status_text.text(f"正在回测 ({idx + 1}/{total_stocks}): {row['name']} ({row['ts_code']})")
+                        
+                        try:
+                            # 下载数据
+                            data_loader = DataLoader(tushare_token=params['tushare_token'])
+                            data = data_loader.download_data(row['ts_code'], params['start_date'], params['end_date'])
+                            
+                            if data is None:
+                                continue
+                                
+                            # 获取策略类
+                            strategy_class = StrategyFactory.get_strategy(params['strategy_name'])
+                            if not strategy_class:
+                                continue
+                                
+                            # 设置策略参数
+                            strategy_params = {
+                                'trail_percent': params['trail_percent'],
+                                'risk_ratio': params['risk_ratio'] / 100,
+                                'max_drawdown': params['max_drawdown'] / 100,
+                            }
+                            
+                            # 创建回测引擎
+                            engine = BacktestEngine(
+                                strategy_class,
+                                data,
+                                cash=params['initial_cash'],
+                                commission=params['commission'],
+                                strategy_params=strategy_params
+                            )
+                            
+                            # 运行回测
+                            results = engine.run()
+                            
+                            # 如果总盈亏为正，添加到结果列表
+                            if results.get('total_pnl', 0) > 0:
+                                # 获取该股票在沪深300中的权重
+                                weight = csi300[csi300['con_code'] == row['ts_code']]['weight'].iloc[0]
+                                positive_stocks.append({
+                                    '股票代码': row['ts_code'],
+                                    '股票名称': row['name'],
+                                    '总盈亏': results['total_pnl'],
+                                    '总收益率': results['total_return'],
+                                    '年化收益率': results['annualized_return'],
+                                    '夏普比率': results['sharpe_ratio'],
+                                    '最大回撤': results['max_drawdown'],
+                                    '胜率': results['win_rate'],
+                                    '指数权重(%)': weight
+                                })
+                                
+                        except Exception as e:
+                            logger.error(f"回测股票 {row['ts_code']} 时出错: {str(e)}")
+                            continue
+                    
+                    # 完成后设置进度条为100%
+                    progress_bar.progress(1.0)
+                    status_text.text("筛选完成！")
+                    
+                    # 显示筛选结果
+                    if positive_stocks:
+                        st.subheader("筛选结果")
+                        # 将结果转换为DataFrame并排序
+                        results_df = pd.DataFrame(positive_stocks)
+                        results_df = results_df.sort_values('总收益率', ascending=False)
+                        
+                        # 格式化百分比列
+                        for col in ['总收益率', '年化收益率', '最大回撤', '胜率']:
+                            results_df[col] = results_df[col].apply(lambda x: f"{x:.2%}")
+                        
+                        # 格式化其他数值列
+                        results_df['总盈亏'] = results_df['总盈亏'].apply(lambda x: f"{x:,.2f}")
+                        results_df['夏普比率'] = results_df['夏普比率'].apply(lambda x: f"{x:.2f}")
+                        results_df['指数权重(%)'] = results_df['指数权重(%)'].apply(lambda x: f"{x:.3f}")
+                        
+                        # 显示结果表格
+                        st.dataframe(
+                            results_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                        
+                        # 显示统计信息
+                        st.subheader("统计信息")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("符合条件的股票数量", len(positive_stocks))
+                        with col2:
+                            st.metric("筛选比例", f"{(len(positive_stocks) / total_stocks * 100):.2f}%")
+                        with col3:
+                            total_weight = sum(float(s['指数权重(%)']) for s in positive_stocks)
+                            st.metric("总指数权重", f"{total_weight:.2f}%")
+                    else:
+                        st.info("未找到符合条件的股票")
+                        
+                except Exception as e:
+                    logger.error(f"沪深300成分股筛选过程中出现错误: {str(e)}")
+                    st.error(f"沪深300成分股筛选失败: {str(e)}")
+    
     if st.button("开始回测", type="primary"):
         # 检查市场情绪策略的token
         if params['strategy_name'] == "市场情绪策略" and not params['tushare_token']:

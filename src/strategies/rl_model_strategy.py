@@ -4,7 +4,6 @@ import pandas as pd
 import torch
 from loguru import logger
 import json
-from src.strategies.rl_model_finrl.agents.stablebaseline3 import DQNAgent
 
 class RLModelStrategy(bt.Strategy):
     params = (
@@ -57,24 +56,7 @@ class RLModelStrategy(bt.Strategy):
     def _load_agent(self):
         """加载训练好的智能体"""
         # 计算状态维度
-        price_dims = 5 * self.p.window_size  # OHLCV数据
-        feature_dims = 30  # 假设有30个技术指标特征
-        account_dims = 2  # 现金和仓位百分比
-        state_dim = price_dims + feature_dims + account_dims
-
-        # 初始化智能体
-        agent = DQNAgent(
-            state_dim=state_dim,
-            action_dim=3,  # 买入、卖出、持有
-            epsilon_start=0.0,  # 回测时不使用探索
-            epsilon_end=0.0,
-            epsilon_decay=1,
-            device=self.device
-        )
-
-        # 加载模型参数
-        agent.load(self.p.model_path)
-        return agent
+        pass
 
     def _get_state(self):
         """构建当前状态"""

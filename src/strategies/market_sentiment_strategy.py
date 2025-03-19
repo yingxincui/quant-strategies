@@ -50,7 +50,7 @@ class MarketSentimentStrategy(bt.Strategy):
         ('price_drop_threshold', 0.98), # 加仓价格条件阈值
         ('atr_multiplier', 1.5),      # ATR倍数
         ('history_length', 60),       # 历史数据长度
-        ('atr_tp_multiplier_min', 2.5),   # ATR止盈最小倍数
+        ('atr_tp_multiplier_min', 1.5),   # ATR止盈最小倍数
         ('atr_tp_multiplier_max', 5),   # ATR止盈最大倍数
         ('atr_tp_min_profit', 0.5),   # ATR止盈最小盈利要求
         ('vol_atr_ratio', 0.8),       # 波动率与ATR倍数的相关系数
@@ -127,7 +127,6 @@ class MarketSentimentStrategy(bt.Strategy):
         # 存储价格和成交量数据用于趋势分析
         self.price_history = []
         self.volume_history = []
-        self.rsi_history = []
         
         # 情绪指标
         self.sentiment_data = None
@@ -172,7 +171,10 @@ class MarketSentimentStrategy(bt.Strategy):
         
         # T+1交易限制
         self.buy_dates = set()
-                
+        
+        # 记录是否是核心信号开仓
+        self.is_core_signal_position = False
+        
         logger.info(f"多维度市场情绪策略初始化 - 核心信号: {self.p.sentiment_core}, "
                    f"次级信号: {self.p.sentiment_secondary}, 预警信号: {self.p.sentiment_warning}")
 
@@ -400,19 +402,17 @@ class MarketSentimentStrategy(bt.Strategy):
                     # 每股分红
                     div_per_share = dividend_amount / self.position.size
                     # 调整平均成本
-                    self.avg_cost -= div_per_share
-                    logger.info(f"ETF分红后调整平均成本 - 原成本: {self.avg_cost + div_per_share:.4f}, 新成本: {self.avg_cost:.4f}, 每股分红: {div_per_share:.4f}")
+                    self.avg_cost = max(0.001, self.avg_cost - div_per_share)  # 确保成本不会变为负数或0
+                    logger.info(f"ETF分红后调整平均成本 - 原成本: {self.avg_cost + div_per_share:.4f}, 新成本: {self.avg_cost:.4f}, 每股分红: {div_per_share:.4f}, 总分红: {dividend_amount:.2f}")
             
         # 更新历史数据
         self.price_history.append(self.data.close[0])
         self.volume_history.append(self.data.volume[0])
-        self.rsi_history.append(self.rsi[0])
         
         # 保持历史数据长度为60个周期
         if len(self.price_history) > self.p.history_length:
             self.price_history = self.price_history[-self.p.history_length:]
             self.volume_history = self.volume_history[-self.p.history_length:]
-            self.rsi_history = self.rsi_history[-self.p.history_length:]
             
         # 第一次调用next时获取情绪数据
         if self.sentiment_data is None:
@@ -485,18 +485,24 @@ class MarketSentimentStrategy(bt.Strategy):
             market_regime = self.trend_detector.detect(
                 np.array(self.price_history),
                 np.array(self.volume_history),
-                np.array(self.rsi_history),
                 current_date
             )
             
             # 趋势止损检查
             if self.position and self.position.size > 0:
+                logger.info(f"趋势止损检查 - 当前市场状态: {market_regime}, 上一次市场状态: {self.last_market_regime}")
                 if self.last_market_regime == 'normal' and market_regime == 'downtrend':
-                    self.trade_reason = f"趋势止损 - 市场状态从normal变为downtrend"
-                    self.order = self.close()
-                    if self.order:
-                        logger.info(f"趋势止损触发 - 市场状态: {market_regime}, 情绪: {sentiment_value:.2f}, 波动率: {details['conditional_vol']:.2f}%")
-                    return
+                    # 计算相对持仓均价的跌幅
+                    avg_cost = self.get_avg_cost()
+                    price_drop = (avg_cost - current_price) / avg_cost
+                    logger.info(f"趋势止损检查 - 市场状态从normal变为downtrend, 跌幅{price_drop:.2%}")
+                    # 只有当跌幅超过5%时才触发止损
+                    if price_drop > 0.05:
+                        self.trade_reason = f"趋势止损 - 市场状态从normal变为downtrend, 跌幅{price_drop:.2%}"
+                        self.order = self.close()
+                        if self.order:
+                            logger.info(f"趋势止损触发 - 市场状态: {market_regime}, 情绪: {sentiment_value:.2f}, 波动率: {details['conditional_vol']:.2f}%, 跌幅: {price_drop:.2%}")
+                        return
             
             # 更新上一次市场状态
             self.last_market_regime = market_regime
@@ -509,18 +515,20 @@ class MarketSentimentStrategy(bt.Strategy):
             
             # 如果是下跌趋势，检查是否需要减仓
             if market_regime == 'downtrend' and self.position and self.position.size > 0:
-                # 判断是否需要减仓
-                avg_cost = self.get_avg_cost()
-                profit_pct = ((current_price / avg_cost) - 1.0) * 100 if avg_cost > 0 else 0
-                
-                if profit_pct > 0:  # 如果有盈利，考虑减仓
-                    shares_to_sell = self.round_shares(self.position.size * 0.5)  # 卖出一半
-                    if shares_to_sell >= self.p.min_shares:
-                        self.trade_reason = f"下跌趋势减仓 - 保留盈利({profit_pct:.2f}%)"
-                        self.order = self.sell(size=shares_to_sell)
-                        if self.order:
-                            logger.info(f"下跌趋势减仓 - 情绪: {sentiment_value:.2f}, 盈利: {profit_pct:.2f}%, 平仓数量: {shares_to_sell}")
-                        return
+                # 如果是核心信号开仓，则不执行减仓操作
+                if not self.is_core_signal_position:
+                    # 判断是否需要减仓
+                    avg_cost = self.get_avg_cost()
+                    profit_pct = ((current_price / avg_cost) - 1.0) * 100 if avg_cost > 0 else 0
+                    
+                    if profit_pct > 0:  # 如果有盈利，考虑减仓
+                        shares_to_sell = self.round_shares(self.position.size * 0.5)  # 卖出一半
+                        if shares_to_sell >= self.p.min_shares:
+                            self.trade_reason = f"下跌趋势减仓 - 保留盈利({profit_pct:.2f}%)"
+                            self.order = self.sell(size=shares_to_sell)
+                            if self.order:
+                                logger.info(f"下跌趋势减仓 - 情绪: {sentiment_value:.2f}, 盈利: {profit_pct:.2f}%, 平仓数量: {shares_to_sell}")
+                            return
             
             # 调整目标仓位
             for signal in signals:
@@ -542,10 +550,19 @@ class MarketSentimentStrategy(bt.Strategy):
                         
                         if shares_to_buy >= self.p.min_shares:
                             if market_regime == 'downtrend':
-                                logger.info(f"检测到下跌趋势，但在核心开仓区，允许买入 - 情绪: {sentiment_value:.2f}")
-                                self.trade_reason = f"下跌趋势，但满足核心信号情绪阈值，允许买入 - 情绪({sentiment_value:.1f})"
+                                # 只有在没有持仓时（首次建仓）才允许下跌趋势下的核心信号买入
+                                if not self.position and sentiment_value < self.p.sentiment_core:
+                                    logger.info(f"检测到下跌趋势，但在核心开仓区，允许首次建仓 - 情绪: {sentiment_value:.2f}")
+                                    self.trade_reason = f"下跌趋势，但满足核心信号情绪阈值，允许买入 - 情绪({sentiment_value:.1f})"
+                                    # 标记为核心信号开仓
+                                    self.is_core_signal_position = True
+                                else:
+                                    # 如果已有持仓或不是核心信号，则跳过买入
+                                    return
                             else:
                                 self.trade_reason = f"情绪信号买入 - {market_regime}市场, 情绪({sentiment_value:.1f})"
+                                # 非下跌趋势开仓，重置核心信号标记
+                                self.is_core_signal_position = False
                             self.order = self.buy(size=shares_to_buy)
                             if self.order:
                                 self.buy_dates.add(current_date)
@@ -680,6 +697,7 @@ class MarketSentimentStrategy(bt.Strategy):
         self.take_profit_price = None
         self.entry_price_for_tp = None
         self.current_position_ratio = 0.0
+        self.is_core_signal_position = False  # 重置核心信号开仓标记
         if self.p.use_trailing_stop:
             self.trailing_stop.stop_tracking()
         self.buy_dates = set()
@@ -700,12 +718,16 @@ class MarketSentimentStrategy(bt.Strategy):
                     self.avg_cost = order.executed.price
                 else:
                     # 计算新的平均成本
-                    old_size = self.position.size - order.executed.size
-                    new_size = self.position.size
-                    
-                    if new_size > 0:
-                        self.avg_cost = (self.avg_cost * old_size + order.executed.price * order.executed.size) / new_size
-                
+                    # 当前持仓量是 position.size - order.executed.size (因为position.size已经包含了新买入的数量)
+                    current_position = self.position.size - order.executed.size
+                    current_value = current_position * self.avg_cost
+                    new_value = order.executed.size * order.executed.price
+                    total_position = current_position + order.executed.size
+                    self.avg_cost = (current_value + new_value) / total_position
+                    logger.info(f"当前持仓量: {current_position}, 当前持仓市值: {current_value}, 新买入市值: {new_value}, 总持仓量: {total_position}")
+
+
+                logger.info(f"买入平均成本: {self.avg_cost:.4f}")
                 # 记录入场价格用于计算止盈
                 self.entry_price = order.executed.price  # 保留最后一次买入价格
                 
@@ -718,8 +740,13 @@ class MarketSentimentStrategy(bt.Strategy):
                 self.current_position_ratio = self.get_position_value_ratio()
                 
                 order.info = {'reason': self.trade_reason}  # 记录交易原因
-                order.info['total_value'] = self.broker.getvalue()  # 记录总资产（含现金）
-                order.info['position_value'] = self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
+                # 计算总资产和持仓市值 - 使用最新价格
+                current_price = self.data.close[0]
+                position_value = self.position.size * current_price if self.position else 0
+                total_value = self.broker.getcash() + position_value
+                
+                order.info['total_value'] = total_value  # 记录总资产（含现金）
+                order.info['position_value'] = position_value  # 记录持仓市值
                 order.info['position_ratio'] = self.current_position_ratio  # 记录持仓比例
                 order.info['avg_cost'] = self.avg_cost  # 记录平均成本
                 order.info['etf_code'] = self.etf_code  # 添加ETF代码
@@ -729,6 +756,9 @@ class MarketSentimentStrategy(bt.Strategy):
                           f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {self.avg_cost:.2f}, 原因: {self.trade_reason}')
             else:
                 # 卖出 - 更新持仓相关指标
+                # 记录卖出前的平均成本（用于日志记录）
+                last_avg_cost = self.avg_cost
+                
                 if not self.position or self.position.size == 0:  # 如果全部平仓
                     self.entry_price = None
                     self.avg_cost = None
@@ -741,16 +771,26 @@ class MarketSentimentStrategy(bt.Strategy):
                 self.current_position_ratio = self.get_position_value_ratio()
                 
                 order.info = {'reason': self.trade_reason}  # 记录交易原因
-                order.info['total_value'] = self.broker.getvalue()  # 记录总资产（含现金）
-                order.info['position_value'] = self.position.size * order.executed.price if self.position else 0  # 记录持仓市值
+                # 计算总资产和持仓市值 - 使用最新价格
+                current_price = self.data.close[0]
+                position_value = self.position.size * current_price if self.position else 0
+                total_value = self.broker.getcash() + position_value
+                
+                order.info['total_value'] = total_value  # 记录总资产（含现金）
+                order.info['position_value'] = position_value  # 记录持仓市值
                 order.info['position_ratio'] = self.current_position_ratio  # 记录持仓比例
-                if self.avg_cost is not None:
-                    order.info['avg_cost'] = self.avg_cost  # 记录平均成本
+                order.info['avg_cost'] = last_avg_cost  # 记录卖出前的平均成本
                 order.info['etf_code'] = self.etf_code  # 添加ETF代码
                 order.info['execution_date'] = self.data.datetime.date(0)  # 添加执行日期
                 self._orders.append(order)  # 添加到订单列表
+                
+                # 计算卖出收益
+                profit = (order.executed.price - last_avg_cost) * order.executed.size if last_avg_cost else 0
+                profit_pct = ((order.executed.price / last_avg_cost) - 1.0) * 100 if last_avg_cost else 0
+                
                 logger.info(f'卖出执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
-                          f'仓位比例: {self.current_position_ratio:.2%}, 原因: {self.trade_reason}')
+                          f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {last_avg_cost:.4f}, '
+                          f'收益: {profit:.2f}, 收益率: {profit_pct:.2f}%, 原因: {self.trade_reason}')
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             logger.warning(f'订单失败 - 状态: {order.getstatusname()}')
             

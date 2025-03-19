@@ -95,6 +95,7 @@ class Analysis:
                     trade_info = order.info.get('reason', '未知原因')
                     total_value = order.info.get('total_value', None)
                     position_value = order.info.get('position_value', None)
+                    avg_cost = order.info.get('avg_cost', None)
                     etf_code = order.info.get('etf_code', order.data._name if hasattr(order, 'data') else None)
                     # 获取交易日期
                     trade_date = order.info.get('execution_date', bt.num2date(order.data.datetime[0]))
@@ -102,6 +103,7 @@ class Analysis:
                     trade_info = '未知原因'
                     total_value = None
                     position_value = None
+                    avg_cost = None
                     etf_code = order.data._name if hasattr(order, 'data') else None
                     trade_date = bt.num2date(order.data.datetime[0])
                 
@@ -112,7 +114,7 @@ class Analysis:
                         'direction': 'Long',
                         'price': price,
                         'size': size,
-                        'avg_price': price,  # 买入时均价就是成交价
+                        'avg_price': avg_cost if avg_cost else 0,  # 买入时均价就是成交价
                         'pnl': 0,
                         'return': 0,
                         'reason': trade_info,
@@ -121,16 +123,10 @@ class Analysis:
                         'etf_code': etf_code
                     })
                 else:
-                    # 尝试找到对应的买入记录以计算盈亏
-                    entry_price = None
-                    for t in reversed(engine.trades):
-                        if t['direction'] == 'Long' and t['etf_code'] == etf_code:
-                            entry_price = t['price']
-                            break
-                    
-                    if entry_price:
-                        pnl = (price - entry_price) * size
-                        ret = (price - entry_price) / entry_price if entry_price > 0 else 0
+                    # 使用持仓均价计算盈亏
+                    if avg_cost:
+                        pnl = (price - avg_cost) * size
+                        ret = (price - avg_cost) / avg_cost
                     else:
                         pnl = 0
                         ret = 0
@@ -140,7 +136,7 @@ class Analysis:
                         'direction': 'Short',
                         'price': price,
                         'size': abs(size),
-                        'avg_price': entry_price if entry_price else 0,
+                        'avg_price': avg_cost if avg_cost else 0,
                         'pnl': -pnl,
                         'return': ret,
                         'reason': trade_info,
