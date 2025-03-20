@@ -69,6 +69,8 @@ class DataLoader:
                 
         except Exception as e:
             logger.error(f"下载数据失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise
 
     def _download_stock_data(self, symbol, start_date, end_date):

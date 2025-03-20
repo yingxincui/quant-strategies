@@ -82,35 +82,35 @@ class MarketSentimentStrategy(bt.Strategy):
         self.data._name = self.etf_code
         
         # 获取回测区间
-        start_date = None
-        end_date = None
+        self.start_date = None
+        self.end_date = None
         try:
             if hasattr(self.data, 'params'):
                 if hasattr(self.data.params, 'fromdate'):
-                    start_date = self.data.params.fromdate
-                    if isinstance(start_date, datetime):
-                        start_date = start_date.date()
+                    self.start_date = self.data.params.fromdate
+                    if isinstance(self.start_date, datetime):
+                        self.start_date = self.start_date.date()
                 if hasattr(self.data.params, 'todate'):
-                    end_date = self.data.params.todate
-                    if isinstance(end_date, datetime):
-                        end_date = end_date.date()
+                    self.end_date = self.data.params.todate
+                    if isinstance(self.end_date, datetime):
+                        self.end_date = self.end_date.date()
         except Exception as e:
             logger.warning(f"获取回测区间时出错: {str(e)}")
             
         # 如果没有从params获取到日期，则使用数据源的日期
-        if not start_date:
-            start_date = self.data.datetime.date(0)
-        if not end_date:
-            end_date = self.data.datetime.date(-1)
+        # if not start_date:
+        #     start_date = self.data.datetime.date(0)
+        # if not end_date:
+        #     end_date = self.data.datetime.date(-1)
             
-        logger.info(f"初始化分红处理器 - 股票代码: {self.etf_code}, 回测区间: {start_date} 至 {end_date}")
+        logger.info(f"初始化分红处理器 - 股票代码: {self.etf_code}, 回测区间: {self.start_date} 至 {self.end_date}")
         
         # 初始化分红处理器
         self.dividend_handler = None
         if self.p.handle_dividend:
             if self.etf_code:
                 self.dividend_handler = ETFDividendHandler(ts_code=self.etf_code)
-                self.dividend_handler.update_dividend_data(start_date=start_date, end_date=end_date)
+                self.dividend_handler.update_dividend_data(start_date=self.start_date, end_date=self.end_date)
             else:
                 logger.warning("无法获取股票代码，分红处理功能将不可用")
         
@@ -174,6 +174,9 @@ class MarketSentimentStrategy(bt.Strategy):
         
         # 记录是否是核心信号开仓
         self.is_core_signal_position = False
+        
+        # 记录上次清仓日期
+        self.last_close_date = None
         
         logger.info(f"多维度市场情绪策略初始化 - 核心信号: {self.p.sentiment_core}, "
                    f"次级信号: {self.p.sentiment_secondary}, 预警信号: {self.p.sentiment_warning}")
@@ -430,7 +433,8 @@ class MarketSentimentStrategy(bt.Strategy):
                         
                 # 如果缓存不存在或为空,重新获取数据
                 if not self.sentiment_data:
-                    self.sentiment_data = get_sentiment_data()
+                    logger.info(f"开始获取市场情绪数据 - 开始日期: {self.start_date}, 结束日期: {self.end_date}")
+                    self.sentiment_data = get_sentiment_data(start_date=self.start_date, end_date=self.end_date)
                     if self.sentiment_data:
                         # 写入缓存
                         with open(cache_file, 'w') as f:
@@ -529,6 +533,13 @@ class MarketSentimentStrategy(bt.Strategy):
                             if self.order:
                                 logger.info(f"下跌趋势减仓 - 情绪: {sentiment_value:.2f}, 盈利: {profit_pct:.2f}%, 平仓数量: {shares_to_sell}")
                             return
+            
+            # 检查是否满足清仓后等待期要求
+            if self.last_close_date:
+                days_since_close = (current_date - self.last_close_date).days
+                if days_since_close < 5:
+                    logger.info(f"清仓后等待期不足5个交易日，跳过开仓 - 已等待: {days_since_close}天")
+                    return
             
             # 调整目标仓位
             for signal in signals:
@@ -690,6 +701,11 @@ class MarketSentimentStrategy(bt.Strategy):
                         logger.info(f"追踪止损触发 - 当前价格: {current_price:.2f}, 止损价: {stop_price:.2f}")
                     return
 
+        # 如果持仓为空，记录清仓日期
+        if not self.position:
+            self.last_close_date = self.data.datetime.date(0)
+            logger.info(f"记录清仓日期: {self.last_close_date}")
+
     def _reset_position_state(self):
         """重置持仓相关的状态变量"""
         self.entry_price = None
@@ -766,6 +782,9 @@ class MarketSentimentStrategy(bt.Strategy):
                     self.entry_price_for_tp = None
                     if self.p.use_trailing_stop:
                         self.trailing_stop.stop_tracking()
+                    # 记录清仓日期
+                    self.last_close_date = self.data.datetime.date(0)
+                    logger.info(f"记录清仓日期: {self.last_close_date}")
                 
                 # 更新当前持仓比例
                 self.current_position_ratio = self.get_position_value_ratio()
@@ -785,11 +804,15 @@ class MarketSentimentStrategy(bt.Strategy):
                 self._orders.append(order)  # 添加到订单列表
                 
                 # 计算卖出收益
-                profit = (order.executed.price - last_avg_cost) * order.executed.size if last_avg_cost else 0
-                profit_pct = ((order.executed.price / last_avg_cost) - 1.0) * 100 if last_avg_cost else 0
+                profit = (order.executed.price - last_avg_cost) * order.executed.size if last_avg_cost and order.executed.price else 0
+                profit_pct = ((order.executed.price / last_avg_cost) - 1.0) * 100 if last_avg_cost and order.executed.price else 0
                 
-                logger.info(f'卖出执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
-                          f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {last_avg_cost:.4f}, '
+                # 格式化价格和成本
+                price_str = f"{order.executed.price:.2f}" if order.executed.price else "N/A"
+                cost_str = f"{last_avg_cost:.4f}" if last_avg_cost else "N/A"
+                
+                logger.info(f'卖出执行 - 价格: {price_str}, 数量: {order.executed.size}, '
+                          f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {cost_str}, '
                           f'收益: {profit:.2f}, 收益率: {profit_pct:.2f}%, 原因: {self.trade_reason}')
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             logger.warning(f'订单失败 - 状态: {order.getstatusname()}')

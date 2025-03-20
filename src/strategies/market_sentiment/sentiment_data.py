@@ -7,7 +7,7 @@ from src.data.data_loader import DataLoader
 # 添加arch库导入支持GARCH模型
 from arch import arch_model
 
-def get_sentiment_data():
+def get_sentiment_data(start_date = None, end_date = None):
     """获取市场情绪指标"""
     try:
         # 从环境变量获取token并初始化DataLoader
@@ -22,8 +22,11 @@ def get_sentiment_data():
         }
         
         # 获取时间范围
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365 * 10)
+        if start_date is None or end_date is None:
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=365 * 10)
+        
+        logger.info(f"获取市场情绪数据 - 开始日期: {start_date}, 结束日期: {end_date}")
         
         try:
             # 获取市场情绪指标
@@ -205,6 +208,42 @@ def get_sentiment_data():
                         start_date=start_date.strftime('%Y%m%d'),
                         end_date=end_date.strftime('%Y%m%d')
                     )
+                    
+                    # 检查是否为当前交易日且需要添加实时数据
+                    today = datetime.now()
+                    if end_date.strftime('%Y%m%d') == today.strftime('%Y%m%d') and df is not None and not df.empty:
+                        # 检查是否有当天数据
+                        today_str = today.strftime('%Y%m%d')
+                        if today_str not in df['trade_date'].astype(str).values:
+                            try:
+                                # 获取实时行情数据
+                                realtime_data = data_loader.pro.realtime_quote(ts_code=ts_code)
+                                if realtime_data is not None and not realtime_data.empty:
+                                    # 检查df中是否已有相同日期的数据
+                                    existing_today = df[df['trade_date'].astype(str) == today_str]
+                                    if existing_today.empty:
+                                        # 创建当天数据行
+                                        today_row = {
+                                            'ts_code': ts_code,
+                                            'trade_date': today_str,
+                                            'open': float(realtime_data['open'].iloc[0]),
+                                            'high': float(realtime_data['high'].iloc[0]),
+                                            'low': float(realtime_data['low'].iloc[0]),
+                                            'close': float(realtime_data['price'].iloc[0]),
+                                            'pre_close': float(realtime_data['pre_close'].iloc[0]),
+                                            'change': float(realtime_data['price'].iloc[0]) - float(realtime_data['pre_close'].iloc[0]),
+                                            'pct_chg': (float(realtime_data['price'].iloc[0]) / float(realtime_data['pre_close'].iloc[0]) - 1) * 100,
+                                            'vol': float(realtime_data['vol'].iloc[0]),
+                                            'amount': float(realtime_data['amount'].iloc[0])
+                                        }
+                                        # 添加到数据框
+                                        df = pd.concat([df, pd.DataFrame([today_row])], ignore_index=True)
+                                        logger.info(f"已添加实时数据到 {ts_code}")
+                            except Exception as e:
+                                logger.error(f"获取实时数据失败 {ts_code}: {e}")
+                                import traceback
+                                traceback.print_exc()
+                    
                     if df is not None and not df.empty:
                         df['index_code'] = ts_code
                         df['weight'] = index_weights[ts_code]  # 添加权重
@@ -420,6 +459,8 @@ def get_sentiment_data():
             import traceback
             logger.error(traceback.format_exc())  # 打印完整堆栈跟踪
             result['sentiment'] = []
+        
+        logger.info(f"获取市场情绪数据 - 结果: {result}")
 
         # 对所有数据按日期排序
         for key in result:

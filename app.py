@@ -3,6 +3,8 @@ import os
 from src.utils.logger import setup_logger
 from ui.pages.sidebar import render_sidebar
 from ui.pages.backtest import render_backtest
+from ui.pages.market import render_market
+from ui.pages.settings import render_settings
 
 # 设置日志
 logger = setup_logger()
@@ -23,7 +25,7 @@ def main():
         return
         
     # 创建标签页
-    tab1, tab2, tab3, tab4 = st.tabs(["系统介绍", "回测", "文章", "系统设置"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["系统介绍", "回测", "实盘记录", "文章", "系统设置"])
 
     # 系统介绍标签页
     with tab1:
@@ -40,8 +42,12 @@ def main():
     with tab2:
         render_backtest(params)
     
-    # 文章标签页
+    # 实盘记录标签页
     with tab3:
+        render_market(params)
+    
+    # 文章标签页
+    with tab4:
         st.header("文章列表")
         try:
             # 获取articles目录下的所有md文件
@@ -70,9 +76,8 @@ def main():
             st.error(f"读取文章时出错: {str(e)}")
     
     # 系统设置标签页
-    with tab4:
-        st.header("系统设置")
-        st.info("该功能正在开发中...")
+    with tab5:
+        render_settings()
 
 if __name__ == "__main__":
     main() 
