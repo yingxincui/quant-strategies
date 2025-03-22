@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timedelta
 import time
 import tushare as ts
+import akshare as ak
 import backtrader as bt
 from src.utils.logger import setup_logger
 from src.utils.notification import send_notification
@@ -33,8 +34,34 @@ class MarketExecutor:
         """获取实时行情数据"""
         try:
             # 获取实时行情
-            realtime_data = self.data_loader.pro.realtime_quote(ts_code=ts_code)
-            return realtime_data
+            # 转换为雪球指数代码格式
+            if ts_code == '000001.SH':
+                market_code = 'SH000001'
+            elif ts_code == '000300.SH':
+                market_code = 'SH000300'
+            elif ts_code == '000016.SH':
+                market_code = 'SH000016'
+            elif ts_code == '399240.SZ':
+                market_code = 'SZ399240'
+            else:
+                market_code = ts_code.replace('.SH', 'SH').replace('.SZ', 'SZ')
+                
+            realtime_data = ak.stock_individual_spot_xq(symbol=market_code)
+            if realtime_data is not None and not realtime_data.empty:
+                # 将数据转换为以item为索引的格式
+                realtime_data = realtime_data.set_index('item')
+                # 转换数据格式以匹配原有接口
+                return pd.DataFrame({
+                    'ts_code': [ts_code],
+                    'open': [float(realtime_data.loc['今开', 'value'])],
+                    'high': [float(realtime_data.loc['最高', 'value'])],
+                    'low': [float(realtime_data.loc['最低', 'value'])],
+                    'close': [float(realtime_data.loc['现价', 'value'])],
+                    'pre_close': [float(realtime_data.loc['昨收', 'value'])],
+                    'vol': [float(realtime_data.loc['成交量', 'value'])],
+                    'amount': [float(realtime_data.loc['成交额', 'value'])]
+                })
+            return None
         except Exception as e:
             logger.error(f"获取实时数据失败: {str(e)}")
             import traceback

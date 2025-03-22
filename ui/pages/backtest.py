@@ -8,6 +8,7 @@ import os
 import plotly.graph_objects as go
 import tushare as ts
 from datetime import datetime, timedelta
+import json
 
 logger = setup_logger()
 
@@ -326,6 +327,50 @@ def render_backtest(params):
                 
                 # 绘制回测图表
                 st.subheader("回测结果图表")
+
+                # 添加情绪指标图表
+                try:
+                    with open('cache/sentiment_data.json', 'r', encoding='utf-8') as f:
+                        sentiment_data = json.load(f)
+                    
+                    # 从sentiment数组创建DataFrame
+                    sentiment_df = pd.DataFrame(sentiment_data['sentiment'])
+                    
+                    # 将value列重命名为sentiment
+                    sentiment_df = sentiment_df.rename(columns={'value': 'sentiment'})
+                    
+                    # 转换日期格式
+                    sentiment_df['date'] = pd.to_datetime(sentiment_df['date'])
+                    
+                    # 按日期排序
+                    sentiment_df = sentiment_df.sort_values('date')
+                    
+                    fig_sentiment = go.Figure()
+                    fig_sentiment.add_trace(go.Scatter(
+                        x=sentiment_df['date'],
+                        y=sentiment_df['sentiment'],
+                        mode='lines',
+                        name='市场情绪',
+                        line=dict(color='purple')
+                    ))
+                    
+                    fig_sentiment.update_layout(
+                        title='市场情绪指标',
+                        xaxis_title='日期',
+                        yaxis_title='情绪值',
+                        hovermode='x unified',
+                        xaxis=dict(tickformat='%Y年%m月%d日'),
+                        # 添加网格线使图表更清晰
+                        xaxis_gridcolor='lightgrey',
+                        yaxis_gridcolor='lightgrey',
+                        plot_bgcolor='white'
+                    )
+                    
+                    st.plotly_chart(fig_sentiment, use_container_width=True)
+                except Exception as e:
+                    logger.error(f"加载情绪指标数据失败: {str(e)}")
+                    logger.error(f"数据内容: {sentiment_data if 'sentiment_data' in locals() else '未加载'}")
+                    st.warning("无法加载情绪指标数据，请检查数据格式")
 
                 # 添加总资产变化图表
                 if not trades.empty:                    

@@ -102,40 +102,75 @@ class DataLoader:
     def _download_etf_data(self, symbol, start_date, end_date):
         """下载ETF数据"""
         symbol_code = symbol.split('.')[0]  # 去掉市场后缀
+        start_str = start_date.strftime('%Y%m%d')
+        end_str = end_date.strftime('%Y%m%d')
         
         try:
-            df = ak.fund_etf_hist_em(symbol=symbol_code, period="daily")
-            
-            # 重命名列以匹配backtrader要求
-            df = df.rename(columns={
-                '日期': 'date',
-                '开盘': 'open',
-                '最高': 'high',
-                '最低': 'low',
-                '收盘': 'close',
-                '成交量': 'volume'
-            })
-            
-            # 转换日期格式并设置为索引
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.set_index('date')
-            df = df.sort_index()  # 确保按日期升序
-            
-            # 过滤日期范围
-            logger.info(f"过滤日期范围: {start_date} 至 {end_date}")
-            mask = (df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))
-            df = df[mask]
+            # 判断是否有tushare_token
+            if self.tushare_token:
+                logger.info(f"使用Tushare下载ETF数据: {symbol}")
+                df = self.pro.fund_daily(ts_code=symbol, start_date=start_str, end_date=end_str)
+                
+                if not df.empty:
+                    # 重命名列以匹配backtrader要求
+                    df = df.rename(columns={
+                        'trade_date': 'date',
+                        'open': 'open',
+                        'high': 'high',
+                        'low': 'low',
+                        'close': 'close',
+                        'vol': 'volume'
+                    })
+                    
+                    # 转换日期格式并设置为索引
+                    df['date'] = pd.to_datetime(df['date'])
+                    df = df.set_index('date')
+                    df = df.sort_index()  # 确保按日期升序
+                else:
+                    logger.warning(f"Tushare未返回ETF数据，尝试使用AKShare: {symbol}")
+                    df = self._download_etf_from_akshare(symbol_code, start_date, end_date)
+            else:
+                logger.info(f"未设置Tushare token，使用AKShare下载ETF数据: {symbol}")
+                df = self._download_etf_from_akshare(symbol_code, start_date, end_date)
             
             if df.empty:
-                logger.warning(f"过滤后数据为空 - 股票代码: {symbol}, 日期范围: {start_date} 至 {end_date}")
+                logger.warning(f"下载ETF数据为空 - 股票代码: {symbol}, 日期范围: {start_date} 至 {end_date}")
                 return pd.DataFrame()
                 
-            logger.info(f"过滤后数据长度: {len(df)}, 日期范围: {df.index[0]} 至 {df.index[-1]}")
+            logger.info(f"下载ETF数据成功: {symbol}，数据长度: {len(df)}, 日期范围: {df.index[0]} 至 {df.index[-1]}")
             return df[['open', 'high', 'low', 'close', 'volume']]
             
         except Exception as e:
             logger.error(f"下载ETF数据失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
+    
+    def _download_etf_from_akshare(self, symbol_code, start_date, end_date):
+        """使用AKShare下载ETF数据"""
+        df = ak.fund_etf_hist_em(symbol=symbol_code, period="daily")
+        
+        # 重命名列以匹配backtrader要求
+        df = df.rename(columns={
+            '日期': 'date',
+            '开盘': 'open',
+            '最高': 'high',
+            '最低': 'low',
+            '收盘': 'close',
+            '成交量': 'volume'
+        })
+        
+        # 转换日期格式并设置为索引
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date')
+        df = df.sort_index()  # 确保按日期升序
+        
+        # 过滤日期范围
+        logger.info(f"过滤日期范围: {start_date} 至 {end_date}")
+        mask = (df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))
+        df = df[mask]
+        
+        return df
 
     def _download_hk_data(self, symbol, start_date, end_date):
         """下载港股数据"""

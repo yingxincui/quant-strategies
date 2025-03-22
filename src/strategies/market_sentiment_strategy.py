@@ -7,24 +7,24 @@ from src.strategies.market_sentiment.sentiment_data import get_sentiment_data
 import math
 import numpy as np
 import pandas as pd
-from src.strategies.market_sentiment.utils import TrendStateDetector, PositionManager, generate_signals
+from src.strategies.market_sentiment.utils import TrendStateDetector, PositionManager
 from src.strategies.market_sentiment.etf_dividend_handler import ETFDividendHandler
 from datetime import datetime
 
 class MarketSentimentStrategy(bt.Strategy):
     params = (
-        ('sentiment_core', 2.5),     # 核心信号情绪阈值
-        ('sentiment_secondary', 20.0), # 次级信号情绪阈值
-        ('sentiment_warning', 22.0),   # 预警信号情绪阈值
-        ('sentiment_sell_1', 25.0),    # 第一阶段止盈阈值
-        ('sentiment_sell_2', 30.0),    # 第二阶段止盈阈值
-        ('sentiment_sell_3', 80.0),   # 第三阶段止盈阈值
+        ('sentiment_core', 5.0),     # 核心信号情绪阈值
+        ('sentiment_secondary', 15.0), # 次级信号情绪阈值
+        ('sentiment_warning', 9.0),   # 预警信号情绪阈值
+        ('sentiment_sell_1', 40.0),    # 第一阶段止盈阈值
+        ('sentiment_sell_2', 55.0),    # 第二阶段止盈阈值
+        ('sentiment_sell_3', 70.0),   # 第三阶段止盈阈值
         ('position_core', 0.5),       # 核心信号仓位比例
         ('position_grid_step', 0.1),  # 网格加仓步长
         ('position_warning', 0.05),   # 预警信号初始仓位
         ('position_bb_signal', 0.1),  # 布林带突破信号仓位
         ('min_momentum', -5.0),       # 最小动量要求(10日涨跌幅)
-        ('vol_threshold', 25.0),      # 高波动率阈值
+        ('vol_threshold', 20.0),      # 高波动率阈值
         ('quick_profit_days', 5),     # 短期获利天数
         ('quick_profit_pct', 15.0),   # 短期获利比例阈值
         ('high_vol_profit_pct', 20.0),# 高波动市场获利阈值
@@ -47,13 +47,17 @@ class MarketSentimentStrategy(bt.Strategy):
         ('core_min_shares', 35000),    # 核心信号最大买入股数
         ('secondary_min_shares', 30000), # 次级信号最大买入股数
         ('min_profit_pct', 1.0),      # 最小盈利要求
-        ('price_drop_threshold', 0.98), # 加仓价格条件阈值
-        ('atr_multiplier', 1.5),      # ATR倍数
+        ('price_drop_threshold', 0.99), # 加仓价格条件阈值
+        ('atr_multiplier', 1),      # ATR倍数
         ('history_length', 60),       # 历史数据长度
-        ('atr_tp_multiplier_min', 1.5),   # ATR止盈最小倍数
-        ('atr_tp_multiplier_max', 5),   # ATR止盈最大倍数
+        ('atr_tp_multiplier_min', 1),   # ATR止盈最小倍数
+        ('atr_tp_multiplier_max', 3),   # ATR止盈最大倍数
         ('atr_tp_min_profit', 0.5),   # ATR止盈最小盈利要求
+        ('tp_min_profit', 2.0),       # 普通止盈最小盈利要求
         ('vol_atr_ratio', 0.8),       # 波动率与ATR倍数的相关系数
+        ('sentiment_entry', 25.0),    # 情绪开仓阈值
+        ('max_add_positions', 5),     # 最大补仓次数
+        ('max_atr_tp_times', 2),      # 最大ATR止盈次数
     )
 
     def __init__(self):
@@ -97,12 +101,6 @@ class MarketSentimentStrategy(bt.Strategy):
         except Exception as e:
             logger.warning(f"获取回测区间时出错: {str(e)}")
             
-        # 如果没有从params获取到日期，则使用数据源的日期
-        # if not start_date:
-        #     start_date = self.data.datetime.date(0)
-        # if not end_date:
-        #     end_date = self.data.datetime.date(-1)
-            
         logger.info(f"初始化分红处理器 - 股票代码: {self.etf_code}, 回测区间: {self.start_date} 至 {self.end_date}")
         
         # 初始化分红处理器
@@ -143,6 +141,8 @@ class MarketSentimentStrategy(bt.Strategy):
         self.atr = bt.indicators.ATR(self.data)
         self.rsi = bt.indicators.RSI(self.data, period=self.p.rsi_period)
         self.bb = bt.indicators.BollingerBands(self.data, period=self.p.bb_period, devfactor=self.p.bb_devfactor)
+        self.ema55 = bt.indicators.EMA(self.data.close, period=55)  # EMA55指标
+        self.ema5 = bt.indicators.EMA(self.data.close, period=5)    # 添加EMA5指标
         
         # 量价指标
         self.volume_ma = bt.indicators.SMA(self.data.volume, period=self.p.volume_ma_period)
@@ -177,6 +177,29 @@ class MarketSentimentStrategy(bt.Strategy):
         
         # 记录上次清仓日期
         self.last_close_date = None
+        
+        # 跟踪情绪得分
+        self.last_sentiment = None
+        self.current_sentiment = None
+        self.is_continuous_low = False  # 是否连续低于阈值
+        
+        # 跟踪补仓和止盈次数
+        self.add_position_count = 0  # 补仓次数
+        self.atr_tp_count = 0       # ATR止盈次数
+        
+        # 记录连续低于EMA55的天数
+        self.below_ema55_days = 0
+        
+        # 记录最后一次加仓日期
+        self.last_add_position_date = None
+        # 记录5日前的价格
+        self.price_5days_ago = None
+        # 价格历史记录
+        self.price_history_5d = []
+        # 记录市场状态历史
+        self.market_regime_history = []
+        # 记录是否已经触发过阶梯止盈
+        self.ladder_tp_triggered = False
         
         logger.info(f"多维度市场情绪策略初始化 - 核心信号: {self.p.sentiment_core}, "
                    f"次级信号: {self.p.sentiment_secondary}, 预警信号: {self.p.sentiment_warning}")
@@ -213,6 +236,7 @@ class MarketSentimentStrategy(bt.Strategy):
         
         # 如果当前持仓比例已经超过目标仓位，不再加仓
         if current_ratio >= target_ratio:
+            logger.info(f"当前持仓比例已经超过目标仓位，不再加仓 - 当前比例: {current_ratio:.2f}, 目标比例: {target_ratio:.2f}")
             return 0
         
         # 加仓价格条件：如果已有持仓，只有当前价格比持仓均价低5%以上才允许加仓
@@ -289,6 +313,8 @@ class MarketSentimentStrategy(bt.Strategy):
         """为次级信号计算交易规模，确保最小买入数量"""
         # 先获取通常的交易规模计算结果
         normal_size = self.calculate_trade_size(price, target_ratio)
+
+        logger.info(f"次级信号计算交易规模 - 当前价格: {price:.2f}, 目标仓位比例: {target_ratio:.2f}, 正常计算结果: {normal_size:.2f}")
         
         # 如果已有持仓，需要满足价格条件：当前价格比持仓均价低5%以上才允许加仓
         if self.position and self.position.size > 0:
@@ -296,73 +322,47 @@ class MarketSentimentStrategy(bt.Strategy):
             if price > avg_cost * self.p.price_drop_threshold:  # 当前价格比均价的降幅不足5%
                 return 0  # 不满足加仓价格条件，不加仓
         
-        # 如果正常计算结果超过3000股，则返回该结果
-        if normal_size >= self.p.secondary_min_shares:
+        # 如果正常计算结果超过最小股数要求，则返回该结果
+        if normal_size >= self.p.min_shares:
             return normal_size
         
-        # 否则，计算基于资金的最小买入数量（至少占总资产的5%）
+        # 否则加仓target_ratio的数量
         total_value = self.broker.getvalue()
-        cash = total_value * self.p.cash_buffer  # 留5%作为缓冲
+        cash = self.broker.getcash() * self.p.cash_buffer  # 留5%作为缓冲
         
-        # 计算最小买入市值 - 至少是总资产的5%或200,000元中的较小值
-        min_value_to_buy = min(total_value * 0.05, self.p.secondary_min_value)
-        
-        # 确保不超过可用现金
-        min_value_to_buy = min(min_value_to_buy, cash)
-        
-        # 计算最小股数
-        min_shares = self.round_shares(min_value_to_buy / price)
-        
-        # 取正常计算和最小买入量中的较大值
-        result_shares = max(normal_size, min_shares)
+        # 计算基于目标比例的买入数量
+        target_value = total_value * target_ratio
+        target_shares = self.round_shares(target_value / price)
         
         # 确保不超过可用现金
-        if result_shares * price > cash:
-            result_shares = self.round_shares(cash / price)
-            
+        if target_shares * price > cash:
+            target_shares = self.round_shares(cash / price)
+        
         # 确保最小为100股
-        return result_shares if result_shares >= self.p.min_shares else 0
+        return target_shares if target_shares >= self.p.min_shares else 0
 
     def get_sentiment_details(self, date_str):
-        """获取指定日期的详细情绪数据，如果没有则计算并存储"""
+        """获取指定日期的详细情绪数据"""
         if date_str in self.sentiment_details:
             return self.sentiment_details[date_str]
+        
+        # 从sentiment_data中获取details
+        for sentiment_item in self.sentiment_data['sentiment']:
+            if sentiment_item['date'] == date_str and 'details' in sentiment_item:
+                details = sentiment_item['details']
+                # 存储计算结果
+                self.sentiment_details[date_str] = details
+                return details
             
-        # 计算当前详细数据
-        details = {}
-        
-        # 计算10日涨跌幅
-        details['change'] = self.pct_change_10d[0] * 100 if not math.isnan(self.pct_change_10d[0]) else 0
-        
-        # 计算5日涨跌幅
-        details['change_5d'] = self.pct_change_5d[0] * 100 if not math.isnan(self.pct_change_5d[0]) else 0
-        
-        # GARCH波动率估计 (简化版)
-        # 这里使用ATR/收盘价的比例作为波动率估计
-        details['conditional_vol'] = (self.atr[0] / self.data.close[0]) * 100 if self.data.close[0] > 0 else 0
-        
-        # RSI值
-        details['rsi'] = self.rsi[0] if not math.isnan(self.rsi[0]) else 50
-        
-        # 布林带位置 (价格与均线的偏离程度，以标准差为单位)
-        if not math.isnan(self.bb.mid[0]) and self.bb.mid[0] > 0:
-            bb_width = self.bb.top[0] - self.bb.bot[0]
-            if bb_width > 0:
-                details['bb_position'] = (self.data.close[0] - self.bb.mid[0]) / (bb_width/2)
-            else:
-                details['bb_position'] = 0
-        else:
-            details['bb_position'] = 0
-            
-        # 成交量比率 (相对于均线)
-        if self.volume_ma[0] > 0:
-            details['volume_ratio'] = self.data.volume[0] / self.volume_ma[0]
-        else:
-            details['volume_ratio'] = 1.0
-            
-        # 存储计算结果
-        self.sentiment_details[date_str] = details
-        return details
+        # 如果没有找到数据,返回默认值
+        return {
+            'change': 0,
+            'change_5d': 0,
+            'conditional_vol': 0,
+            'rsi': 50,
+            'bb_position': 0,
+            'volume_ratio': 1.0
+        }
 
     def get_avg_cost(self):
         """获取当前持仓的平均成本"""
@@ -420,28 +420,7 @@ class MarketSentimentStrategy(bt.Strategy):
         # 第一次调用next时获取情绪数据
         if self.sentiment_data is None:
             try:
-                # 检查缓存目录是否存在
-                if not os.path.exists('cache'):
-                    os.makedirs('cache')
-                
-                cache_file = 'cache/sentiment_data.json'
-                
-                # 尝试从缓存读取
-                if os.path.exists(cache_file):
-                    with open(cache_file, 'r') as f:
-                        self.sentiment_data = json.loads(f.read())
-                        
-                # 如果缓存不存在或为空,重新获取数据
-                if not self.sentiment_data:
-                    logger.info(f"开始获取市场情绪数据 - 开始日期: {self.start_date}, 结束日期: {self.end_date}")
-                    self.sentiment_data = get_sentiment_data(start_date=self.start_date, end_date=self.end_date)
-                    if self.sentiment_data:
-                        # 写入缓存
-                        with open(cache_file, 'w') as f:
-                            json.dump(self.sentiment_data, f)
-                    else:
-                        logger.error("无法获取市场情绪数据")
-                        return
+                self.sentiment_data = get_sentiment_data(start_date=self.start_date, end_date=self.end_date)
             except Exception as e:
                 logger.error(f"获取市场情绪数据失败: {str(e)}")
                 return
@@ -492,48 +471,15 @@ class MarketSentimentStrategy(bt.Strategy):
                 current_date
             )
             
-            # 趋势止损检查
-            if self.position and self.position.size > 0:
-                logger.info(f"趋势止损检查 - 当前市场状态: {market_regime}, 上一次市场状态: {self.last_market_regime}")
-                if self.last_market_regime == 'normal' and market_regime == 'downtrend':
-                    # 计算相对持仓均价的跌幅
-                    avg_cost = self.get_avg_cost()
-                    price_drop = (avg_cost - current_price) / avg_cost
-                    logger.info(f"趋势止损检查 - 市场状态从normal变为downtrend, 跌幅{price_drop:.2%}")
-                    # 只有当跌幅超过5%时才触发止损
-                    if price_drop > 0.05:
-                        self.trade_reason = f"趋势止损 - 市场状态从normal变为downtrend, 跌幅{price_drop:.2%}"
-                        self.order = self.close()
-                        if self.order:
-                            logger.info(f"趋势止损触发 - 市场状态: {market_regime}, 情绪: {sentiment_value:.2f}, 波动率: {details['conditional_vol']:.2f}%, 跌幅: {price_drop:.2%}")
-                        return
+            # 更新市场状态历史
+            self.market_regime_history.append(market_regime)
+            if len(self.market_regime_history) > 7:
+                self.market_regime_history.pop(0)
             
-            # 更新上一次市场状态
-            self.last_market_regime = market_regime
-            
-            # 每周记录一次当前市场状态
-            logger.info(f"当前日期: {current_date_str}, 当前市场状态: {market_regime}, 情绪: {sentiment_value:.2f}, 波动率: {details['conditional_vol']:.2f}%")
-            
-            # 生成交易信号
-            signals = generate_signals(sentiment_value, market_regime, details['conditional_vol'])
-            
-            # 如果是下跌趋势，检查是否需要减仓
-            if market_regime == 'downtrend' and self.position and self.position.size > 0:
-                # 如果是核心信号开仓，则不执行减仓操作
-                if not self.is_core_signal_position:
-                    # 判断是否需要减仓
-                    avg_cost = self.get_avg_cost()
-                    profit_pct = ((current_price / avg_cost) - 1.0) * 100 if avg_cost > 0 else 0
-                    
-                    if profit_pct > 0:  # 如果有盈利，考虑减仓
-                        shares_to_sell = self.round_shares(self.position.size * 0.5)  # 卖出一半
-                        if shares_to_sell >= self.p.min_shares:
-                            self.trade_reason = f"下跌趋势减仓 - 保留盈利({profit_pct:.2f}%)"
-                            self.order = self.sell(size=shares_to_sell)
-                            if self.order:
-                                logger.info(f"下跌趋势减仓 - 情绪: {sentiment_value:.2f}, 盈利: {profit_pct:.2f}%, 平仓数量: {shares_to_sell}")
-                            return
-            
+            # 更新情绪值
+            self.last_sentiment = self.current_sentiment
+            self.current_sentiment = sentiment_value
+
             # 检查是否满足清仓后等待期要求
             if self.last_close_date:
                 days_since_close = (current_date - self.last_close_date).days
@@ -541,46 +487,76 @@ class MarketSentimentStrategy(bt.Strategy):
                     logger.info(f"清仓后等待期不足5个交易日，跳过开仓 - 已等待: {days_since_close}天")
                     return
             
-            # 调整目标仓位
-            for signal in signals:
-                if signal['type'] == 'buy':
-                    target_ratio = signal['weight']
-                    
-                    # 根据波动率调整目标仓位
-                    adjusted_ratio = self.position_manager.adjust_position(
-                        target_ratio,
-                        details['conditional_vol']
-                    )
-                    
-                    if adjusted_ratio > self.current_position_ratio:
-                        # 根据情绪分数选择计算方法
-                        if sentiment_value < self.p.sentiment_core:
-                            shares_to_buy = self.calculate_core_signal_size(current_price, adjusted_ratio)
-                        else:
-                            shares_to_buy = self.calculate_secondary_signal_size(current_price, adjusted_ratio)
+            # 检查是否符合开仓条件
+            if len(self.market_regime_history) >= 7:
+                regime_changes = sum(1 for i in range(len(self.market_regime_history)-1) 
+                                    if self.market_regime_history[i] != self.market_regime_history[i+1])
+                if regime_changes >= 2:  # 如果7天内状态变化超过3次，认为是震荡市
+                    logger.info(f"最近7个交易日市场震荡（状态变化{regime_changes}次），跳过开仓")
+                    return
+                
+            if (market_regime == 'uptrend' or market_regime == 'potential_uptrend') and self.last_sentiment is not None and self.current_sentiment is not None:
+                if self.current_sentiment < self.p.sentiment_entry and self.current_sentiment > self.p.sentiment_secondary:
+                    # 没有持仓时开仓
+                    # if not self.position:
+                        # 检查最近7个交易日是否存在震荡市
+                        if self.current_sentiment > self.last_sentiment:  # 情绪值开始回升时开仓
+                            # 计算开仓数量
+                            shares_to_buy = self.calculate_core_signal_size(current_price, self.p.position_core)
+                            if shares_to_buy >= self.p.min_shares:
+                                self.trade_reason = f"情绪回升开仓 - 前值({self.last_sentiment:.2f}) < 当前值({self.current_sentiment:.2f})"
+                                self.order = self.buy(size=shares_to_buy)
+                                return
+
+            if self.position and self.position.size > 0:
+                # 如果价格在EMA55上方，检查加仓条件
+                if self.data.close[0] > self.ema55[0]:
+                    # 如果已经触发过阶梯止盈，不再加仓
+                    if self.ladder_tp_triggered:
+                        logger.info("已触发阶梯止盈，不再加仓")
+                        return
                         
+                    # 检查是否距离上次加仓超过5个交易日
+                    if self.last_add_position_date:
+                        days_since_last_add = (current_date - self.last_add_position_date).days
+                        if days_since_last_add <= 5:
+                            return  # 不满足加仓间隔要求
+                    
+                    # 检查是否可以加仓
+                    if self.add_position_count < self.p.max_add_positions:
+                        shares_to_buy = self.calculate_secondary_signal_size(self.data.close[0], self.p.position_grid_step)
                         if shares_to_buy >= self.p.min_shares:
-                            if market_regime == 'downtrend':
-                                # 只有在没有持仓时（首次建仓）才允许下跌趋势下的核心信号买入
-                                if not self.position and sentiment_value < self.p.sentiment_core:
-                                    logger.info(f"检测到下跌趋势，但在核心开仓区，允许首次建仓 - 情绪: {sentiment_value:.2f}")
-                                    self.trade_reason = f"下跌趋势，但满足核心信号情绪阈值，允许买入 - 情绪({sentiment_value:.1f})"
-                                    # 标记为核心信号开仓
-                                    self.is_core_signal_position = True
-                                else:
-                                    # 如果已有持仓或不是核心信号，则跳过买入
-                                    return
-                            else:
-                                self.trade_reason = f"情绪信号买入 - {market_regime}市场, 情绪({sentiment_value:.1f})"
-                                # 非下跌趋势开仓，重置核心信号标记
-                                self.is_core_signal_position = False
+                            self.trade_reason = f"EMA55上方加仓({self.add_position_count + 1}/{self.p.max_add_positions})"
                             self.order = self.buy(size=shares_to_buy)
                             if self.order:
-                                self.buy_dates.add(current_date)
-                                self.entry_price = current_price
-                                logger.info(f"情绪信号买入 - 市场状态: {market_regime}, 情绪: {sentiment_value:.2f}, "
-                                          f"波动率: {details['conditional_vol']:.2f}%, 仓位: {adjusted_ratio:.2%}, 数量: {shares_to_buy}")
+                                self.last_add_position_date = current_date  # 更新最后加仓日期
+                                self.add_position_count += 1
                             return
+                
+            # 更新上一次市场状态
+            self.last_market_regime = market_regime
+            
+            # 每周记录一次当前市场状态
+            # logger.info(f"当前日期: {current_date_str}, 当前市场状态: {market_regime}, 情绪: {sentiment_value:.2f}, 波动率: {details['conditional_vol']:.2f}%")
+            
+            # 生成交易信号
+            # signals = generate_signals(sentiment_value, market_regime, details['conditional_vol'])
+            
+            # 如果是下跌或震荡趋势，检查是否需要减仓
+            if (market_regime == 'downtrend' or market_regime == 'potential_downtrend') and self.position and self.position.size > 0:
+                # 如果是核心信号开仓，则不执行减仓操作
+                # if not self.is_core_signal_position:
+                # 判断是否需要减仓
+                avg_cost = self.get_avg_cost()
+                profit_pct = ((current_price / avg_cost) - 1.0) * 100 if avg_cost > 0 else 0
+                
+                if profit_pct < -3.0:  # 如果没有盈利，且跌幅超过3%，止损清仓
+                    self.trade_reason = f"下跌趋势止损清仓 - 亏损({profit_pct:.2f}%)"
+                    self.order = self.close()
+                    if self.order:
+                        logger.info(f"下跌趋势止损清仓 - 情绪: {sentiment_value:.2f}, 亏损: {profit_pct:.2f}%, 平仓数量: {self.position.size}")
+                        self._reset_position_state()
+                    return
 
         # =============== 执行动态止盈策略 ===============
         if self.position:
@@ -605,10 +581,13 @@ class MarketSentimentStrategy(bt.Strategy):
                     atr = self.atr[0]
                     # 根据波动率动态调整ATR倍数
                     vol_ratio = details['conditional_vol'] / self.p.vol_threshold
-                    dynamic_multiplier = self.p.atr_tp_multiplier_min + (self.p.atr_tp_multiplier_max - self.p.atr_tp_multiplier_min) * min(vol_ratio * self.p.vol_atr_ratio * 10, 1.0)
+                    dynamic_multiplier = self.p.atr_tp_multiplier_min + (self.p.atr_tp_multiplier_max - self.p.atr_tp_multiplier_min) * min(vol_ratio * self.p.vol_atr_ratio, 1.0)
                     atr_tp_price = avg_cost + (atr * dynamic_multiplier)
+
+                    logger.info(f"ATR倍数: {dynamic_multiplier:.2f}, ATR止盈价格: {atr_tp_price:.2f}, 盈利: {profit_pct:.2f}%")
                     
-                    if current_price >= atr_tp_price and profit_pct >= self.p.atr_tp_min_profit:
+                    # 检查是否满足ATR止盈条件，并且价格不在EMA5上方
+                    if ((current_price >= atr_tp_price and profit_pct >= self.p.atr_tp_min_profit) or (profit_pct >= self.p.tp_min_profit)) and current_price <= self.ema5[0]:
                         # 根据波动率调整卖出比例
                         sell_ratio = 0.5
                         if vol_ratio > 0.05:  # 高波动市场卖出更多
@@ -620,6 +599,7 @@ class MarketSentimentStrategy(bt.Strategy):
                             self.order = self.close()
                             if self.order:
                                 logger.info(f"ATR止盈转清仓 - ATR: {atr:.2f}, 止盈价: {atr_tp_price:.2f}, 盈利: {profit_pct:.2f}%, ATR倍数: {dynamic_multiplier:.2f}, 平仓比例: 100%")
+                                self._reset_position_state()
                             return
                         
                         if shares_to_sell >= self.p.min_shares:
@@ -628,6 +608,14 @@ class MarketSentimentStrategy(bt.Strategy):
                             if self.order:
                                 logger.info(f"ATR止盈触发 - ATR: {atr:.2f}, 止盈价: {atr_tp_price:.2f}, 盈利: {profit_pct:.2f}%, ATR倍数: {dynamic_multiplier:.2f}, 平仓数量: {shares_to_sell}")
                             return
+                    elif (current_price >= atr_tp_price and profit_pct >= self.p.atr_tp_min_profit) and current_price > self.ema5[0] and self.add_position_count > 0:
+                        logger.info(f"满足ATR止盈条件但价格在EMA5上方，且补过仓，止盈清仓 - 当前价格: {current_price:.2f}, EMA5: {self.ema5[0]:.2f}")
+                        self.trade_reason = f"ATR止盈 - 价格突破ATR止盈点({atr_tp_price:.2f}), 盈利: {profit_pct:.2f}%, ATR倍数: {dynamic_multiplier:.2f}"
+                        self.order = self.close()
+                        if self.order:
+                            logger.info(f"ATR止盈触发清仓 - ATR: {atr:.2f}, 止盈价: {atr_tp_price:.2f}, 盈利: {profit_pct:.2f}%, ATR倍数: {dynamic_multiplier:.2f}")
+                            self._reset_position_state()
+                        return
             
             # 阶梯式止盈机制
             if sentiment_value >= self.p.sentiment_sell_3 and self.current_position_ratio > 0 and profit_pct >= min_profit_pct:
@@ -635,6 +623,7 @@ class MarketSentimentStrategy(bt.Strategy):
                 self.order = self.close()
                 if self.order:
                     logger.info(f"阶梯止盈3触发 - 情绪: {sentiment_value:.1f}, 盈利: {profit_pct:.2f}%, 平仓比例: 100%")
+                    self._reset_position_state()
                 return
                 
             elif sentiment_value >= self.p.sentiment_sell_2 and self.current_position_ratio > 0 and profit_pct >= min_profit_pct:
@@ -644,6 +633,7 @@ class MarketSentimentStrategy(bt.Strategy):
                     self.order = self.close()
                     if self.order:
                         logger.info(f"阶梯止盈2转清仓 - 情绪: {sentiment_value:.1f}, 盈利: {profit_pct:.2f}%, 平仓比例: 100%")
+                        self._reset_position_state()
                     return
                 
                 if shares_to_sell >= self.p.min_shares:
@@ -651,6 +641,7 @@ class MarketSentimentStrategy(bt.Strategy):
                     self.order = self.sell(size=shares_to_sell)
                     if self.order:
                         logger.info(f"阶梯止盈2触发 - 情绪: {sentiment_value:.1f}, 盈利: {profit_pct:.2f}%, 平仓数量: {shares_to_sell}")
+                        self.ladder_tp_triggered = True  # 标记已触发阶梯止盈
                     return
                     
             elif sentiment_value >= self.p.sentiment_sell_1 and self.current_position_ratio > 0 and profit_pct >= min_profit_pct:
@@ -660,6 +651,7 @@ class MarketSentimentStrategy(bt.Strategy):
                     self.order = self.close()
                     if self.order:
                         logger.info(f"阶梯止盈1转清仓 - 情绪: {sentiment_value:.1f}, 盈利: {profit_pct:.2f}%, 平仓比例: 100%")
+                        self._reset_position_state()
                     return
                 
                 if shares_to_sell >= 100:
@@ -667,28 +659,7 @@ class MarketSentimentStrategy(bt.Strategy):
                     self.order = self.sell(size=shares_to_sell)
                     if self.order:
                         logger.info(f"阶梯止盈1触发 - 情绪: {sentiment_value:.1f}, 盈利: {profit_pct:.2f}%, 平仓数量: {shares_to_sell}")
-                    return
-            
-            # 动量保护规则
-            if details['change_5d'] > self.p.quick_profit_pct:
-                profit_pct = self.p.high_vol_profit_pct if details['conditional_vol'] > self.p.vol_threshold else self.p.quick_profit_pct
-                shares_to_sell = self.round_shares(self.position.size * 0.5)
-                
-                if details['conditional_vol'] > self.p.vol_threshold:
-                    shares_to_sell = self.round_shares(self.position.size * 0.8)
-                
-                if self.position.size - shares_to_sell < 3000:
-                    self.trade_reason = f"动量保护转清仓 - 5日涨幅{details['change_5d']:.1f}% > {profit_pct:.1f}%"
-                    self.order = self.close()
-                    if self.order:
-                        logger.info(f"动量保护转清仓 - 5日涨幅: {details['change_5d']:.2f}%, 波动率: {details['conditional_vol']:.2f}%, 平仓比例: 100%")
-                    return
-                    
-                if shares_to_sell >= 100:
-                    self.trade_reason = f"动量保护止盈 - 5日涨幅{details['change_5d']:.1f}% > {profit_pct:.1f}%"
-                    self.order = self.sell(size=shares_to_sell)
-                    if self.order:
-                        logger.info(f"动量保护止盈 - 5日涨幅: {details['change_5d']:.2f}%, 波动率: {details['conditional_vol']:.2f}%, 平仓数量: {shares_to_sell}")
+                        self.ladder_tp_triggered = True  # 标记已触发阶梯止盈
                     return
             
             # 追踪止损检查
@@ -701,15 +672,9 @@ class MarketSentimentStrategy(bt.Strategy):
                         logger.info(f"追踪止损触发 - 当前价格: {current_price:.2f}, 止损价: {stop_price:.2f}")
                     return
 
-        # 如果持仓为空，记录清仓日期
-        if not self.position:
-            self.last_close_date = self.data.datetime.date(0)
-            logger.info(f"记录清仓日期: {self.last_close_date}")
-
     def _reset_position_state(self):
         """重置持仓相关的状态变量"""
         self.entry_price = None
-        self.avg_cost = None
         self.take_profit_price = None
         self.entry_price_for_tp = None
         self.current_position_ratio = 0.0
@@ -718,6 +683,14 @@ class MarketSentimentStrategy(bt.Strategy):
             self.trailing_stop.stop_tracking()
         self.buy_dates = set()
         self.highest_value = self.broker.getvalue()
+        self.add_position_count = 0
+        self.atr_tp_count = 0
+        self.is_continuous_low = False
+        self.below_ema55_days = 0  # 重置EMA55计数
+        self.last_add_position_date = None  # 重置最后加仓日期
+        self.price_history_5d = []  # 重置5日价格历史
+        self.market_regime_history = []  # 重置市场状态历史
+        self.ladder_tp_triggered = False  # 重置阶梯止盈标记
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
