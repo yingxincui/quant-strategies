@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from src.strategies.strategy_factory import StrategyFactory
 from src.data.data_loader import DataLoader
+from src.data.future_data_loader import FutureDataLoader
 from src.utils.backtest_engine import BacktestEngine
 from src.utils.logger import setup_logger
 import os
@@ -189,6 +190,11 @@ def render_backtest(params):
         if params['strategy_name'] == "市场情绪策略" and not params['tushare_token']:
             st.error("市场情绪策略必须提供Tushare Token")
             return
+        
+        # 检查双均线对冲策略的token
+        if params['strategy_name'] == "双均线对冲策略" and not params['tushare_token']:
+            st.error("双均线对冲策略必须提供Tushare Token")
+            return
             
         with st.spinner("正在进行回测..."):
             try:
@@ -204,6 +210,21 @@ def render_backtest(params):
                         for d in data:
                             etf_code = d.params.ts_code if hasattr(d, 'params') and hasattr(d.params, 'ts_code') else '未知'
                             logger.info(f"加载ETF数据源: {etf_code}")
+                elif params['strategy_name'] == "双均线对冲策略":
+                    # 加载ETF数据
+                    etf_data = data_loader.download_data(params['symbol'], params['start_date'], params['end_date'])
+                    
+                    # 加载豆粕期货数据
+                    future_loader = FutureDataLoader(
+                        start_date=params['start_date'], 
+                        end_date=params['end_date'],
+                        token=params['tushare_token']
+                    )
+                    future_data = future_loader.load()
+                    
+                    # 将两个数据源组合
+                    data = [etf_data, future_data]
+                    logger.info(f"加载ETF数据源: {etf_data._name} 和期货数据源: {future_data._name}")
                 else:
                     data = data_loader.download_data(params['symbol'], params['start_date'], params['end_date'])
                 
@@ -225,10 +246,20 @@ def render_backtest(params):
                 }
                 
                 # 如果是双均线策略，添加特定参数
-                if params['strategy_name'] == "双均线策略":
+                if params['strategy_name'] == "双均线策略" or params['strategy_name'] == "双均线对冲策略":
                     strategy_params.update({
                         'fast_period': params['fast_period'],
                         'slow_period': params['slow_period'],
+                        'atr_multiplier': params['atr_multiplier'],
+                        'enable_trailing_stop': params['enable_trailing_stop'],
+                        'enable_death_cross': params['enable_death_cross'],
+                    })
+                
+                # 如果是双均线对冲策略，添加对冲相关参数
+                if params['strategy_name'] == "双均线对冲策略":
+                    strategy_params.update({
+                        'hedge_contract_size': params['hedge_contract_size'],
+                        'hedge_profit_multiplier': params['hedge_profit_multiplier'],
                     })
                 
                 # 如果是ETF轮动策略，添加特定参数
@@ -246,8 +277,8 @@ def render_backtest(params):
                         'atr_multiplier': params['atr_multiplier'],
                     })
                 
-                # 如果是市场情绪策略，添加tushare token
-                if params['strategy_name'] == "市场情绪策略":
+                # 如果是市场情绪策略或双均线对冲策略，添加tushare token
+                if params['strategy_name'] in ["市场情绪策略", "双均线对冲策略"]:
                     os.environ['TUSHARE_TOKEN'] = params['tushare_token']
                 
                 # 创建回测引擎
@@ -264,6 +295,35 @@ def render_backtest(params):
                 
                 # 显示回测结果
                 st.header("回测结果")
+                
+                # 检查是否是双账户策略
+                if 'is_dual_account' in results and results['is_dual_account']:
+                    st.header("双账户回测结果")
+                    
+                    # ETF账户信息
+                    st.subheader("ETF账户")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("ETF账户最终资金", f"{results['etf_value']:.2f}")
+                    with col2:
+                        st.metric("ETF账户收益率", f"{results['etf_return']:.2%}")
+                    with col3:
+                        st.metric("ETF初始资金", "100,000.00")
+                        
+                    # 期货账户信息
+                    st.subheader("期货账户")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("期货账户最终资金", f"{results['future_value']:.2f}")
+                    with col2:
+                        st.metric("期货账户收益率", f"{results['future_return']:.2%}")
+                    with col3:
+                        st.metric("期货初始资金", "100,000.00")
+                        
+                    # 总体表现
+                    st.subheader("总体表现")
+                else:
+                    st.header("回测结果")
                 
                 # 显示交易统计
                 trades = results.get('trades', pd.DataFrame())  # 获取交易记录DataFrame
@@ -368,9 +428,12 @@ def render_backtest(params):
                     
                     st.plotly_chart(fig_sentiment, use_container_width=True)
                 except Exception as e:
-                    logger.error(f"加载情绪指标数据失败: {str(e)}")
-                    logger.error(f"数据内容: {sentiment_data if 'sentiment_data' in locals() else '未加载'}")
-                    st.warning("无法加载情绪指标数据，请检查数据格式")
+                    import traceback
+                    traceback.print_exc()
+                    if params['strategy_name'] == "市场情绪策略":
+                        logger.error(f"加载情绪指标数据失败: {str(e)}")
+                        logger.error(f"数据内容: {sentiment_data if 'sentiment_data' in locals() else '未加载'}")
+                        st.warning("无法加载情绪指标数据，请检查数据格式")
 
                 # 添加总资产变化图表
                 if not trades.empty:                    

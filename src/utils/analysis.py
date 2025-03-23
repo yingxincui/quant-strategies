@@ -1,5 +1,5 @@
 import numpy as np
-from datetime import datetime
+from datetime import datetime, time, date
 import pandas as pd
 import backtrader as bt
 from loguru import logger
@@ -12,8 +12,23 @@ class Analysis:
         """获取回测分析结果"""
         analysis = {}
         
-        # 计算总收益率
-        analysis['total_return'] = (strategy.broker.getvalue() / strategy.broker.startingcash) - 1
+        # 在计算总收益率之前，检查是否是双账户策略
+        if hasattr(strategy.broker, 'total_returns'):
+            # 使用双账户策略中计算的总收益率
+            analysis['total_return'] = strategy.broker.total_returns
+            analysis['etf_return'] = strategy.broker.etf_returns
+            analysis['future_return'] = strategy.broker.future_returns
+            analysis['etf_value'] = strategy.broker.etf_value
+            analysis['future_value'] = strategy.broker.future_value
+            analysis['is_dual_account'] = True
+            
+            logger.info(f"双账户策略 - ETF账户: {analysis['etf_value']:.2f} ({analysis['etf_return']:.2%}), "
+                      f"期货账户: {analysis['future_value']:.2f} ({analysis['future_return']:.2%}), "
+                      f"总收益率: {analysis['total_return']:.2%}")
+        else:
+            # 传统单账户策略
+            analysis['total_return'] = (strategy.broker.getvalue() / strategy.broker.startingcash) - 1
+            analysis['is_dual_account'] = False
         
         # 计算年化收益率
         start_date = bt.num2date(strategy.data.datetime[-len(strategy.data.datetime)+1])
@@ -109,27 +124,34 @@ class Analysis:
                 
                 # 添加交易记录
                 if is_buy:
+                    # 检查是否有期货交易的盈亏记录
+                    trade_pnl = order.info.get('pnl', 0) if hasattr(order, 'info') and order.info else 0
+                    trade_return = order.info.get('return', 0) if hasattr(order, 'info') and order.info else 0
+                    
                     engine.trades.append({
                         'time': trade_date,
                         'direction': 'Long',
                         'price': price,
                         'size': size,
                         'avg_price': avg_cost if avg_cost else 0,  # 买入时均价就是成交价
-                        'pnl': 0,
-                        'return': 0,
+                        'pnl': trade_pnl,  # 使用订单中记录的盈亏，特别是对期货交易
+                        'return': trade_return,  # 使用订单中记录的收益率
                         'reason': trade_info,
                         'total_value': total_value,
                         'position_value': position_value,
                         'etf_code': etf_code
                     })
                 else:
-                    # 使用持仓均价计算盈亏
-                    if avg_cost:
+                    # 使用持仓均价计算盈亏，或从订单信息中获取
+                    trade_pnl = order.info.get('pnl', 0) if hasattr(order, 'info') and order.info else 0
+                    trade_return = order.info.get('return', 0) if hasattr(order, 'info') and order.info else 0
+                    
+                    # 如果没有预先计算的盈亏，尝试计算（针对ETF交易）
+                    if trade_pnl == 0 and avg_cost:
                         pnl = (price - avg_cost) * size
                         ret = (price - avg_cost) / avg_cost
-                    else:
-                        pnl = 0
-                        ret = 0
+                        trade_pnl = -pnl
+                        trade_return = ret
                     
                     engine.trades.append({
                         'time': trade_date,
@@ -137,8 +159,8 @@ class Analysis:
                         'price': price,
                         'size': abs(size),
                         'avg_price': avg_cost if avg_cost else 0,
-                        'pnl': -pnl,
-                        'return': ret,
+                        'pnl': trade_pnl,
+                        'return': trade_return,
                         'reason': trade_info,
                         'total_value': total_value,
                         'position_value': position_value,
@@ -152,21 +174,40 @@ class Analysis:
             analysis['total_pnl'] = 0
             return analysis
         
-        # 按时间排序
+        # 按时间排序 - 确保所有时间都是相同类型
+        # 先将所有日期类型转换为datetime类型
+        for trade in engine.trades:
+            if isinstance(trade['time'], date) and not isinstance(trade['time'], datetime):
+                # 如果是date类型，转换为datetime类型（设置时间为当天15:00:00）
+                trade['time'] = datetime.combine(trade['time'], time(15, 0, 0))
+
+        # 现在所有的时间都是datetime类型，可以安全排序
         engine.trades.sort(key=lambda x: x['time'])
         
         # 转换为DataFrame
         trades_df = pd.DataFrame(engine.trades)
         
+        # 确保数值列为数字类型
+        trades_df['pnl'] = pd.to_numeric(trades_df['pnl'], errors='coerce')
+        trades_df['return'] = pd.to_numeric(trades_df['return'], errors='coerce')
+        
         # 计算总盈亏（在格式化之前）
-        total_pnl = trades_df['pnl'].astype(float).sum()
+        total_pnl = trades_df['pnl'].sum()
         
         # 格式化数据
         trades_df['time'] = pd.to_datetime(trades_df['time']).dt.strftime('%Y-%m-%d')
         trades_df['price'] = trades_df['price'].map(lambda x: '{:.3f}'.format(x) if x is not None else '')
         trades_df['avg_price'] = trades_df['avg_price'].map(lambda x: '{:.4f}'.format(x) if x is not None else '')
-        trades_df['return'] = trades_df['return'].map(lambda x: '{:.2%}'.format(x) if x is not None else '')
-        trades_df['pnl'] = trades_df['pnl'].map(lambda x: '{:.2f}'.format(x) if x is not None else '')
+        
+        # 收益率格式化 - 百分比显示
+        trades_df['return'] = trades_df['return'].apply(
+            lambda x: '{:.2%}'.format(x) if pd.notnull(x) else ''
+        )
+        
+        trades_df['pnl'] = trades_df['pnl'].apply(
+            lambda x: '{:.2f}'.format(x) if pd.notnull(x) else ''
+        )
+        
         trades_df['size'] = trades_df['size'].astype(int)
         
         # 处理可能为None的字段

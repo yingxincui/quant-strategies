@@ -8,10 +8,36 @@ import sys
 
 class BacktestEngine:
     def __init__(self, strategy_class, data_feed, cash=100000.0, commission=0.00025, strategy_params=None):
-        """初始化回测引擎"""
+        """初始化回测引擎
+        Args:
+            strategy_class: 策略类
+            data_feed: 数据源或数据源列表
+            cash: 初始资金
+            commission: 股票交易手续费率
+            strategy_params: 策略参数
+        """
         self.cerebro = bt.Cerebro()
         self.cerebro.broker.setcash(cash)
-        self.cerebro.broker.setcommission(commission=commission)        
+        
+        # 设置手续费
+        if isinstance(data_feed, list):
+            # 默认设置股票/ETF手续费率
+            self.cerebro.broker.setcommission(commission=commission)
+            
+            # 创建多数据源的特定手续费处理
+            for i, feed in enumerate(data_feed):
+                if i == 1:  # 期货数据源使用固定手续费
+                    # 为期货设置固定手续费
+                    self.cerebro.broker.addcommissioninfo(
+                        bt.CommissionInfo(
+                            commission=1.51/100000,  # 固定手续费转换为相对值
+                            margin=0.10,             # 保证金比例
+                            mult=10,                 # 合约乘数
+                            commtype=0               # 固定手续费类型(0=固定手续费)
+                        )
+                    )
+        else:
+            self.cerebro.broker.setcommission(commission=commission)
         
         # 添加数据源
         try:

@@ -46,10 +46,10 @@ class DataLoader:
             # 判断市场类型
             if symbol.endswith(('.SH', '.SZ')):  # A股或ETF
                 if symbol.startswith('51') or symbol.startswith('159'):  # ETF
-                    logger.info(f"使用AKShare下载ETF数据: {symbol}")
+                    logger.info(f"下载ETF数据: {symbol}")
                     df = self._download_etf_data(symbol, start_date, end_date)
                 else:  # A股
-                    logger.info(f"使用Tushare下载A股数据: {symbol}")
+                    logger.info(f"下载A股数据: {symbol}")
                     df = self._download_stock_data(symbol, start_str, end_str)
             elif symbol.endswith('.HK'):  # 港股
                 logger.info(f"使用AKShare下载港股数据: {symbol}")
