@@ -46,7 +46,29 @@ class FutureDataLoader:
             start_date = pd.to_datetime(self.start_date)
             end_date = pd.to_datetime(self.end_date)
             
-            logger.info(f"开始获取主力合约列表 - 时间段: {start_date.date()} 至 {end_date.date()}")
+            # 根据结束月份确定是否需要获取下一个主力合约
+            end_month = end_date.month
+            next_month_map = {
+                1: 3,   # 1月份需要获取3月合约
+                3: 5,   # 3月份需要获取5月合约
+                5: 7,   # 5月份需要获取7月合约
+                7: 9,   # 7月份需要获取9月合约
+                9: 11,  # 9月份需要获取11月合约
+                11: 1   # 11月份需要获取次年1月合约
+            }
+            
+            # 如果结束月份在映射中，延长结束日期到下个月中旬
+            if end_month in next_month_map:
+                next_month = next_month_map[end_month]
+                if next_month == 1:  # 如果是次年1月合约
+                    extended_end = pd.Timestamp(year=end_date.year + 1, month=1, day=15)
+                else:
+                    extended_end = pd.Timestamp(year=end_date.year, month=next_month, day=15)
+                logger.info(f"结束月份为{end_month}月，延长数据获取至{extended_end.strftime('%Y-%m-%d')}以获取下一个主力合约")
+            else:
+                extended_end = end_date
+            
+            logger.info(f"开始获取主力合约列表 - 时间段: {start_date.date()} 至 {extended_end.date()}")
             
             # 获取所有可交易的合约
             logger.info(f"正在获取{self.future_code}期货合约列表...")
@@ -71,13 +93,13 @@ class FutureDataLoader:
             dominant_contracts = []
             current_date = start_date
             
-            while current_date <= end_date:
+            while current_date <= extended_end:  # 使用延长后的结束日期
                 logger.debug(f"处理日期: {current_date.date()}")
                 
                 # 找到当前日期可用的合约
                 available_contracts = contracts[
                     (contracts['last_ddate'] > current_date) & 
-                    (contracts['last_ddate'] <= end_date + pd.Timedelta(days=15))  # 确保合约在回测期间内
+                    (contracts['last_ddate'] <= extended_end + pd.Timedelta(days=15))  # 确保合约在回测期间内
                 ]
                 
                 if len(available_contracts) == 0:
@@ -119,8 +141,8 @@ class FutureDataLoader:
                 
                 # 确定该合约的主力时间段
                 contract_start = current_date
-                # 提前15天切换主力合约
-                contract_end = min(end_date, dominant_contract['last_ddate'] - pd.Timedelta(days=15))
+                # 提前30天切换主力合约
+                contract_end = min(extended_end, dominant_contract['last_ddate'] - pd.Timedelta(days=30))
                 
                 # 确保结束日期大于开始日期
                 if contract_end <= contract_start:
@@ -139,7 +161,7 @@ class FutureDataLoader:
                 current_date = contract_end + pd.Timedelta(days=1)
                 
                 # 防止死循环
-                if current_date > end_date:
+                if current_date > extended_end:
                     break
             
             logger.info(f"最终获取到{len(dominant_contracts)}个主力合约")
@@ -206,6 +228,9 @@ class FutureDataLoader:
             # 按日期排序
             combined_data = combined_data.sort_values('trade_date')
             
+            # 创建合约代码映射
+            self.contract_mapping = pd.Series(combined_data['contract'].values, index=pd.to_datetime(combined_data['trade_date'])).to_dict()
+            
             # 调整数据格式以符合backtrader要求
             combined_data['datetime'] = pd.to_datetime(combined_data['trade_date'])
             
@@ -235,9 +260,10 @@ class FutureDataLoader:
                 name=f"{self.future_code}_DOMINANT"
             )
             
-            # 添加期货代码属性
+            # 添加期货代码属性和合约映射
             data._name = f"{self.future_code}_DOMINANT"
             data.ts_code = f"{self.future_code}_DOMINANT"
+            data.contract_mapping = self.contract_mapping  # 添加合约映射字典
             
             logger.info(f"成功合并{len(dominant_contracts)}个合约的数据，总行数: {len(combined_data)}")
             return data
