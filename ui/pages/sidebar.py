@@ -17,10 +17,10 @@ def render_sidebar():
         
         # 数据源设置
         st.subheader("数据源配置")
-        if strategy_name == "市场情绪策略":
+        if strategy_name in ["市场情绪策略", "双均线对冲策略"]:
             tushare_token = st.text_input("Tushare Token（必填）", value="", type="password", help="市场情绪策略需要使用Tushare数据源")
             if not tushare_token:
-                st.error("市场情绪策略必须提供Tushare Token")
+                st.error(f"{strategy_name}必须提供Tushare Token")
         else:
             tushare_token = st.text_input("Tushare Token（可选，如不填则使用akshare）", type="password")
             
@@ -63,16 +63,48 @@ def render_sidebar():
                 st.error("请至少选择一个ETF")
                 return None
         else:
-            symbol = st.text_input("ETF代码", value="510050.SH", help="支持：A股(000001.SZ)、ETF(510300.SH)、港股(00700.HK)")
+            if strategy_name == "双均线对冲策略":
+                symbol = st.text_input("ETF代码", value="159985.SZ", help="使用M豆粕主力合约作为被对冲标的")
+            else:
+                symbol = st.text_input("ETF代码", value="510050.SH", help="支持：A股(000001.SZ)、ETF(510300.SH)、港股(00700.HK)")
         
-        # 移动平均线参数（仅在选择双均线策略时显示）
-        if strategy_name == "双均线策略":
+        # 移动平均线参数（对双均线策略和双均线对冲策略显示）
+        if strategy_name in ["双均线策略", "双均线对冲策略"]:
             st.subheader("均线参数")
             col1, col2 = st.columns(2)
             with col1:
                 fast_period = st.number_input("快线周期", value=5, min_value=1)
             with col2:
-                slow_period = st.number_input("慢线周期", value=30, min_value=1)
+                slow_period = st.number_input("慢线周期", value=13, min_value=1)
+                
+            # 止损止盈参数
+            st.subheader("止损止盈参数")
+            col1, col2 = st.columns(2)
+            with col1:
+                atr_multiplier = st.number_input("ATR倍数", value=1.0, min_value=0.5, max_value=5.0, step=0.1, 
+                                               help="ATR倍数用于计算止损距离，值越大止损距离越远")
+            with col2:
+                atr_period = st.number_input("ATR周期", value=14, min_value=5, max_value=30, step=1)
+                
+            # 其他技术参数
+            col1, col2 = st.columns(2)
+            with col1:
+                enable_trailing_stop = st.checkbox("启用追踪止损", value=False, 
+                                                help="追踪止损会在价格创新高后设置止损价，可以锁定更多利润")
+            with col2:
+                enable_death_cross = st.checkbox("启用死叉卖出", value=False,
+                                              help="启用后，当快线下穿慢线时将卖出持仓")
+            
+        # 双均线对冲策略特有参数
+        if strategy_name == "双均线对冲策略":
+            st.subheader("对冲参数")
+            col1, col2 = st.columns(2)
+            with col1:
+                hedge_contract_size = st.number_input("对冲合约手数", value=10, min_value=1, max_value=100, step=1,
+                                                   help="豆粕期货对冲合约手数，建议10-20手")
+            with col2:
+                hedge_profit_multiplier = st.number_input("对冲盈利倍数", value=1.0, min_value=0.5, max_value=5.0, step=0.1,
+                                                       help="对冲目标盈利 = 原始损失 × (1 + 盈利倍数)")
         
         # ETF轮动策略参数
         if strategy_name == "ETF轮动策略":
@@ -134,8 +166,14 @@ def render_sidebar():
             'tushare_token': tushare_token,
             'selected_etfs': selected_etfs if strategy_name == "ETF轮动策略" else None,
             'symbol': symbol if strategy_name != "ETF轮动策略" else None,
-            'fast_period': fast_period if strategy_name == "双均线策略" else None,
-            'slow_period': slow_period if strategy_name == "双均线策略" else None,
+            'fast_period': fast_period if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
+            'slow_period': slow_period if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
+            'atr_multiplier': atr_multiplier if strategy_name in ["双均线策略", "双均线对冲策略", "ETF轮动策略"] else None,
+            'atr_period': atr_period if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
+            'enable_trailing_stop': enable_trailing_stop if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
+            'enable_death_cross': enable_death_cross if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
+            'hedge_contract_size': hedge_contract_size if strategy_name == "双均线对冲策略" else None,
+            'hedge_profit_multiplier': hedge_profit_multiplier if strategy_name == "双均线对冲策略" else None,
             'momentum_short': momentum_short if strategy_name == "ETF轮动策略" else None,
             'momentum_long': momentum_long if strategy_name == "ETF轮动策略" else None,
             'rebalance_interval': rebalance_interval if strategy_name == "ETF轮动策略" else None,
@@ -145,7 +183,6 @@ def render_sidebar():
             'market_trend_threshold': market_trend_threshold / 100 if strategy_name == "ETF轮动策略" else None,
             'vix_threshold': vix_threshold / 100 if strategy_name == "ETF轮动策略" else None,
             'momentum_decay': momentum_decay / 100 if strategy_name == "ETF轮动策略" else None,
-            'atr_multiplier': atr_multiplier if strategy_name == "ETF轮动策略" else None,
             'trail_percent': trail_percent,
             'risk_ratio': risk_ratio,
             'max_drawdown': max_drawdown,
