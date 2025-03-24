@@ -15,14 +15,14 @@ class DualMAHedgingStrategy(bt.Strategy):
         ('atr_multiplier', 1.0),  # ATR倍数
         ('atr_period', 14),       # ATR周期
         ('enable_death_cross', False),  # 是否启用死叉卖出信号
-        ('enable_hedging', True),  # 是否启用对冲功能
+        ('enable_hedging', False),  # 是否启用对冲功能
         ('hedge_contract_size', 10),  # 对冲合约手数
         ('hedge_fee', 1.51),          # 对冲合约手续费
         ('hedge_profit_multiplier', 1.0),  # 对冲盈利倍数
         ('future_contract_multiplier', 10),  # 期货合约乘数，豆粕为10吨/手
         ('verbose', False),          # 是否启用详细日志
         ('crossover_threshold', 0.003),  # 快线上穿慢线的最小幅度阈值(0.3%)
-        ('volume_ratio_threshold', 0.99),  # 量能放大阈值(1.2倍)
+        ('volume_ratio_threshold', 1.02),  # 量能放大阈值(1.02倍)
         ('volume_surge_threshold', 2.1),  # 量能暴增阈值(2倍)
         ('margin_ratio', 0.95),     # 保证金比例(95%)
     )
@@ -327,9 +327,9 @@ class DualMAHedgingStrategy(bt.Strategy):
             if self.crossover > 0:  # 金叉，买入信号
                 # 检查上穿幅度是否满足阈值要求
                 if crossover_pct > self.p.crossover_threshold:
-                    # 检查量能是否大于前一日
+                    # 检查量能是否大于5日均量
                     current_volume = self.data.volume[0]
-                    prev_volume = self.data.volume[-1]
+                    prev_volume = sum([self.data.volume[-i] for i in range(6)]) / 6
                     
                     if current_volume > self.p.volume_ratio_threshold * prev_volume:
                         shares = self.calculate_trade_size(current_price)
