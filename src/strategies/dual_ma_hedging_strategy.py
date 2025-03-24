@@ -15,19 +15,16 @@ class DualMAHedgingStrategy(bt.Strategy):
         ('atr_multiplier', 1.0),  # ATR倍数
         ('atr_period', 14),       # ATR周期
         ('enable_death_cross', False),  # 是否启用死叉卖出信号
-        ('enable_hedging', False),  # 是否启用对冲功能
+        ('enable_hedging', True),  # 是否启用对冲功能
         ('hedge_contract_size', 10),  # 对冲合约手数
         ('hedge_fee', 1.51),          # 对冲合约手续费
         ('hedge_profit_multiplier', 1.0),  # 对冲盈利倍数
         ('future_contract_multiplier', 10),  # 期货合约乘数，豆粕为10吨/手
         ('verbose', False),          # 是否启用详细日志
         ('crossover_threshold', 0.003),  # 快线上穿慢线的最小幅度阈值(0.3%)
-        ('macd_fast_period', 12),    # MACD快线周期
-        ('macd_slow_period', 26),    # MACD慢线周期
-        ('macd_signal_period', 9),   # MACD信号线周期
-        ('enable_macd_hedge', True), # 是否启用MACD对冲功能
-        ('macd_hedge_size', 10),    # MACD对冲的合约手数
-        ('macd_atr_multiplier', 2.0),  # MACD对冲的ATR倍数
+        ('volume_ratio_threshold', 0.99),  # 量能放大阈值(1.2倍)
+        ('volume_surge_threshold', 2.1),  # 量能暴增阈值(2倍)
+        ('margin_ratio', 0.95),     # 保证金比例(95%)
     )
 
     def __init__(self):
@@ -53,6 +50,14 @@ class DualMAHedgingStrategy(bt.Strategy):
         # 设置数据源的名称
         self.data._name = self.etf_code
         
+        # 保存数据加载器引用
+        self.future_loader = None
+        if hasattr(self.data1, 'params') and hasattr(self.data1.params, 'loader'):
+            self.future_loader = self.data1.params.loader
+            logger.info("成功获取期货数据加载器")
+        else:
+            logger.warning("无法获取期货数据加载器")
+        
         # 设置独立账户
         self.etf_cash = 100000.0  # ETF股票账户资金
         self.future_cash = 100000.0  # 期货账户资金
@@ -71,16 +76,6 @@ class DualMAHedgingStrategy(bt.Strategy):
         self.slow_ma = bt.indicators.SMA(
             self.data.close, period=self.p.slow_period)
         self.crossover = bt.indicators.CrossOver(self.fast_ma, self.slow_ma)
-        
-        # MACD指标
-        self.macd = bt.indicators.MACD(
-            self.data,
-            period_me1=self.p.macd_fast_period,
-            period_me2=self.p.macd_slow_period,
-            period_signal=self.p.macd_signal_period
-        )
-        # MACD死叉信号
-        self.macd_cross = bt.indicators.CrossOver(self.macd.macd, self.macd.signal)
         
         # 记录上一次的移动平均线值，用于计算上穿幅度
         self.last_fast_ma = None
@@ -117,13 +112,7 @@ class DualMAHedgingStrategy(bt.Strategy):
         self.original_loss = None         # 原始止损损失
         self.hedge_target_profit = None   # 对冲目标盈利
         self.hedge_order = None           # 对冲订单
-        
-        # MACD对冲相关变量
-        self.macd_hedge_position = None   # MACD对冲持仓
-        self.macd_hedge_entry_price = None  # MACD对冲入场价格
-        self.macd_hedge_stop_loss = None  # MACD对冲止损价格
-        self.macd_hedge_take_profit = None  # MACD对冲止盈价格
-        self.macd_hedge_order = None      # MACD对冲订单
+        self.hedge_contract_code = None   # 对冲合约代码
         
         logger.info(f"策略初始化完成 - 参数: 快线={self.p.fast_period}, 慢线={self.p.slow_period}, 追踪止损={self.p.trail_percent}%, 风险比例={self.p.risk_ratio:.2%}, 最大回撤={self.p.max_drawdown:.2%}")
         
@@ -143,7 +132,7 @@ class DualMAHedgingStrategy(bt.Strategy):
         cash = self.etf_cash  # 使用ETF账户资金
         
         # 预留更多手续费和印花税缓冲
-        cash = cash * 0.95  # 预留5%的资金作为手续费缓冲
+        cash = cash * self.p.margin_ratio  # 预留5%的资金作为手续费和保证金缓冲
         
         # 计算风险金额（使用ETF账户总资产的一定比例）
         etf_value = cash
@@ -194,9 +183,7 @@ class DualMAHedgingStrategy(bt.Strategy):
         # 首先检查是否启用对冲功能
         if not self.p.enable_hedging:
             logger.info("对冲功能未启用，跳过对冲操作")
-            if self.p.enable_macd_hedge:
-                logger.info("MACD对冲功能未启用，跳过对冲操作")
-                return
+            return
             
         if self.hedge_position is not None or self.hedge_order is not None:
             logger.info("已有对冲仓位或对冲订单，不再开仓")
@@ -261,53 +248,6 @@ class DualMAHedgingStrategy(bt.Strategy):
         except Exception as e:
             logger.error(f"对冲开仓失败: {str(e)}")
 
-    def macd_hedge_open(self):
-        """MACD对冲开仓函数"""
-        if not hasattr(self, 'data1') or self.data1 is None:
-            logger.error("未找到豆粕期货数据，无法进行MACD对冲")
-            return
-            
-        try:
-            # 使用设定的合约手数
-            hedge_size = self.p.macd_hedge_size
-            
-            # 检查期货账户资金是否足够
-            future_price = self.data1.close[0]
-            margin_requirement = future_price * hedge_size * self.p.future_contract_multiplier * 0.10  # 10%保证金
-            
-            if margin_requirement > self.future_cash:
-                logger.warning(f"期货账户资金不足，需要{margin_requirement:.2f}，当前可用{self.future_cash:.2f}")
-                # 根据可用资金调整手数
-                adjusted_size = int(self.future_cash / (future_price * self.p.future_contract_multiplier * 0.10))
-                if adjusted_size < 1:
-                    logger.error("期货账户资金不足以开仓一手")
-                    return
-                hedge_size = adjusted_size
-                logger.info(f"已调整MACD对冲手数为: {hedge_size}")
-            
-            # 开空豆粕期货
-            self.macd_hedge_order = self.sell(data=self.data1, size=hedge_size)
-            
-            # 记录入场价格
-            self.macd_hedge_entry_price = self.data1.close[0]
-            
-            # 使用ATR设置止损和止盈价格
-            current_atr = self.atr[0]
-            self.macd_hedge_stop_loss = self.macd_hedge_entry_price + (current_atr * self.p.macd_atr_multiplier)
-            self.macd_hedge_take_profit = self.macd_hedge_entry_price - (current_atr * self.p.macd_atr_multiplier)
-            
-            # 计算并扣除保证金
-            actual_margin = self.macd_hedge_entry_price * hedge_size * self.p.future_contract_multiplier * 0.10
-            pre_future_cash = self.future_cash
-            self.future_cash -= actual_margin
-            
-            logger.info(f"MACD对冲开仓 - 价格: {self.macd_hedge_entry_price:.2f}, 手数: {hedge_size}, "
-                      f"止损: {self.macd_hedge_stop_loss:.2f}, 止盈: {self.macd_hedge_take_profit:.2f}, "
-                      f"占用保证金: {actual_margin:.2f}, 剩余期货资金: {self.future_cash:.2f}")
-            
-        except Exception as e:
-            logger.error(f"MACD对冲开仓失败: {str(e)}")
-
     def next(self):
         # 重置交易原因（在每个新的交易周期开始时）
         self.trade_reason = None
@@ -322,37 +262,6 @@ class DualMAHedgingStrategy(bt.Strategy):
             self.hedge_entry_price = None
             self.original_loss = None
             self.hedge_target_profit = None
-        
-        # MACD水上死叉判断和对冲逻辑
-        if self.p.enable_macd_hedge and not self.macd_hedge_position and not self.macd_hedge_order:
-            # 判断MACD是否在水上（MACD和信号线都大于0）
-            is_above_water = self.macd.macd[0] > 0 and self.macd.signal[0] > 0
-            # 判断是否发生死叉
-            is_death_cross = self.macd_cross < 0
-            
-            if is_above_water and is_death_cross:
-                logger.info(f"MACD水上死叉 - MACD: {self.macd.macd[0]:.4f}, Signal: {self.macd.signal[0]:.4f}")
-                self.macd_hedge_open()
-        
-        # MACD对冲持仓管理
-        if self.macd_hedge_position is not None and not self.macd_hedge_order:
-            current_price = self.data1.close[0]
-            
-            # 检查止损
-            if current_price >= self.macd_hedge_stop_loss:
-                self.macd_hedge_order = self.close(data=self.data1)
-                logger.info(f"MACD对冲止损 - 当前价格: {current_price:.2f}, 止损价: {self.macd_hedge_stop_loss:.2f}")
-            
-            # 检查止盈
-            elif current_price <= self.macd_hedge_take_profit:
-                self.macd_hedge_order = self.close(data=self.data1)
-                logger.info(f"MACD对冲止盈 - 当前价格: {current_price:.2f}, 止盈价: {self.macd_hedge_take_profit:.2f}")
-            
-            # 记录当前盈亏
-            hedge_price_diff = self.macd_hedge_entry_price - current_price
-            hedge_profit = hedge_price_diff * self.macd_hedge_position.size * self.p.future_contract_multiplier
-            logger.info(f"MACD对冲持仓状态 - 入场价: {self.macd_hedge_entry_price:.2f}, 当前价: {current_price:.2f}, "
-                      f"盈亏: {hedge_profit:.2f}, 止损价: {self.macd_hedge_stop_loss:.2f}, 止盈价: {self.macd_hedge_take_profit:.2f}")
         
         # 如果当前有对冲持仓，检查是否达到止盈条件
         if self.hedge_position is not None and self.hedge_target_profit is not None:
@@ -418,6 +327,51 @@ class DualMAHedgingStrategy(bt.Strategy):
             if self.crossover > 0:  # 金叉，买入信号
                 # 检查上穿幅度是否满足阈值要求
                 if crossover_pct > self.p.crossover_threshold:
+                    # 检查量能是否大于前一日
+                    current_volume = self.data.volume[0]
+                    prev_volume = self.data.volume[-1]
+                    
+                    if current_volume > self.p.volume_ratio_threshold * prev_volume:
+                        shares = self.calculate_trade_size(current_price)
+                        
+                        if shares >= 100:  # 确保至少有100股
+                            # 计算实际所需资金（包括手续费）
+                            required_cash = shares * current_price * 1.0003  # 包含0.03%手续费
+                            
+                            # 确保有足够资金
+                            if required_cash > self.etf_cash * self.p.margin_ratio:
+                                # 根据实际可用资金调整交易规模
+                                adjusted_shares = int(self.etf_cash * self.p.margin_ratio / current_price / 1.0003 / 100) * 100
+                                if adjusted_shares >= 100:
+                                    shares = adjusted_shares
+                                    logger.warning(f"资金不足，已调整交易规模 - 原始: {shares}, 调整后: {adjusted_shares}")
+                                else:
+                                    logger.warning(f"资金不足以买入最低交易单位(100股) - 可用: {self.etf_cash:.2f}, 需要: {required_cash:.2f}")
+                                    return
+                        
+                            self.trade_reason = f"快线上穿慢线 ({self.p.fast_period}日均线上穿{self.p.slow_period}日均线), 上穿幅度: {crossover_pct:.4%}, 量能放大: {current_volume/prev_volume:.2f}倍"
+                            self.order = self.buy(size=shares)
+                            if self.order:
+                                # 记录买入日期和价格
+                                self.buy_dates.add(self.data.datetime.date())
+                                self.entry_price = current_price
+                                logger.info(f"买入信号 - 数量: {shares}, 价格: {current_price:.2f}, 可用资金: {self.etf_cash:.2f}, 风险比例: {self.p.risk_ratio:.2%}, 上穿幅度: {crossover_pct:.4%}, 量能放大: {current_volume/prev_volume:.2f}倍")
+                    else:
+                        logger.info(f"量能不足 - 当前量能: {current_volume}, 前一日量能: {prev_volume}, 量能比: {current_volume/prev_volume:.2f}")
+                else:
+                    logger.info(f"上穿幅度不足 - 当前幅度: {crossover_pct:.4%}, 最小要求: {self.p.crossover_threshold:.4%}")
+            
+            # 新增：量能暴增且均线多头向上开仓条件
+            current_volume = self.data.volume[0]
+            prev_volume = self.data.volume[-1]
+            
+            # 检查量能是否超过前一日两倍
+            if current_volume > self.p.volume_surge_threshold * prev_volume:
+                # 检查快慢均线是否多头向上
+                fast_ma_up = self.fast_ma[0] > self.fast_ma[-1]
+                slow_ma_up = self.slow_ma[0] > self.slow_ma[-1]
+                
+                if fast_ma_up and slow_ma_up:
                     shares = self.calculate_trade_size(current_price)
                     
                     if shares >= 100:  # 确保至少有100股
@@ -425,25 +379,25 @@ class DualMAHedgingStrategy(bt.Strategy):
                         required_cash = shares * current_price * 1.0003  # 包含0.03%手续费
                         
                         # 确保有足够资金
-                        if required_cash > self.etf_cash:
+                        if required_cash > self.etf_cash * self.p.margin_ratio:
                             # 根据实际可用资金调整交易规模
-                            adjusted_shares = int(self.etf_cash / current_price / 1.0003 / 100) * 100
+                            adjusted_shares = int(self.etf_cash * self.p.margin_ratio / current_price / 1.0003 / 100) * 100
                             if adjusted_shares >= 100:
                                 shares = adjusted_shares
                                 logger.warning(f"资金不足，已调整交易规模 - 原始: {shares}, 调整后: {adjusted_shares}")
                             else:
                                 logger.warning(f"资金不足以买入最低交易单位(100股) - 可用: {self.etf_cash:.2f}, 需要: {required_cash:.2f}")
                                 return
-                        
-                        self.trade_reason = f"快线上穿慢线 ({self.p.fast_period}日均线上穿{self.p.slow_period}日均线), 上穿幅度: {crossover_pct:.4%}"
+                    
+                        self.trade_reason = f"量能暴增且均线多头向上 - 量能放大: {current_volume/prev_volume:.2f}倍, 快线: {self.fast_ma[0]:.2f}↑{self.fast_ma[-1]:.2f}, 慢线: {self.slow_ma[0]:.2f}↑{self.slow_ma[-1]:.2f}"
                         self.order = self.buy(size=shares)
                         if self.order:
                             # 记录买入日期和价格
                             self.buy_dates.add(self.data.datetime.date())
                             self.entry_price = current_price
-                            logger.info(f"买入信号 - 数量: {shares}, 价格: {current_price:.2f}, 可用资金: {self.etf_cash:.2f}, 风险比例: {self.p.risk_ratio:.2%}, 上穿幅度: {crossover_pct:.4%}")
+                            logger.info(f"买入信号 - 数量: {shares}, 价格: {current_price:.2f}, 可用资金: {self.etf_cash:.2f}, 风险比例: {self.p.risk_ratio:.2%}, 量能放大: {current_volume/prev_volume:.2f}倍")
                 else:
-                    logger.info(f"上穿幅度不足 - 当前幅度: {crossover_pct:.4%}, 最小要求: {self.p.crossover_threshold:.4%}")
+                    logger.info(f"均线未多头向上 - 快线: {self.fast_ma[0]:.2f} vs {self.fast_ma[-1]:.2f}, 慢线: {self.slow_ma[0]:.2f} vs {self.slow_ma[-1]:.2f}")
         
         else:  # 有持仓
             # 检查是否可以卖出（T+1规则）
@@ -512,23 +466,38 @@ class DualMAHedgingStrategy(bt.Strategy):
             return
             
         if order.status in [order.Completed]:
-            # 检查是否是MACD对冲订单
-            is_macd_hedge = (order.data == self.data1 and order == self.macd_hedge_order)
-            # 检查是否是普通对冲订单
-            is_hedge_order = (order.data == self.data1 and order == self.hedge_order)
+            # 检查是否是对冲订单
+            is_hedge_order = (order.data == self.data1)
             
-            if is_macd_hedge:
-                # MACD对冲订单处理
+            if is_hedge_order:
+                # 对冲订单处理
                 if order.isbuy():  # 买入豆粕期货（平空）
-                    # 计算对冲盈亏
-                    hedge_profit = (self.macd_hedge_entry_price - order.executed.price) * order.executed.size * self.p.future_contract_multiplier
+                    # 检查合约是否匹配
+                    current_contract = self.data1.contract_mapping[self.data1.datetime.datetime(0)]
+                    if current_contract != self.hedge_contract_code:
+                        logger.error(f"合约不匹配 - 开仓合约: {self.hedge_contract_code}, 平仓合约: {current_contract}")
+                        
+                    # 获取开仓合约在平仓日期的价格
+                    if self.future_loader:
+                        price_data = self.future_loader.get_contract_price(self.hedge_contract_code, self.data.datetime.date(0))
+                        if not price_data:
+                            logger.error(f"无法获取合约{self.hedge_contract_code}在{self.data.datetime.date(0)}的价格数据")
+                            return
+                            
+                        # 使用获取到的价格计算对冲盈亏
+                        hedge_profit = (self.hedge_entry_price - price_data['close']) * self.p.hedge_contract_size * self.p.future_contract_multiplier
+                    else:
+                        # 如果没有数据加载器，使用当前价格
+                        logger.warning("无法获取历史价格数据，使用当前价格计算")
+                        hedge_profit = (self.hedge_entry_price - order.executed.price) * self.p.hedge_contract_size * self.p.future_contract_multiplier
+                    
                     # 减去开平仓手续费
-                    total_fee = self.p.hedge_fee * abs(order.executed.size) * 2  # 开仓+平仓
+                    total_fee = self.p.hedge_fee * self.p.hedge_contract_size * 2  # 开仓+平仓
                     net_profit = hedge_profit - total_fee
                     
                     # 归还保证金并添加盈亏到期货账户
-                    margin_returned = self.macd_hedge_entry_price * abs(order.executed.size) * self.p.future_contract_multiplier * 0.10
-                    self.future_cash += margin_returned + net_profit
+                    margin_returned = self.hedge_entry_price * self.p.hedge_contract_size * self.p.future_contract_multiplier * 0.10
+                    self.future_cash += (margin_returned + net_profit)
                     
                     # 更新期货账户最高净值
                     self.future_highest_value = max(self.future_highest_value, self.future_cash)
@@ -536,70 +505,73 @@ class DualMAHedgingStrategy(bt.Strategy):
                     # 计算期货账户回撤
                     future_drawdown = (self.future_highest_value - self.future_cash) / self.future_highest_value if self.future_highest_value > 0 else 0
                     
-                    logger.info(f"MACD对冲平仓 - 价格: {order.executed.price:.2f}, 盈利: {hedge_profit:.2f}, 手续费: {total_fee:.2f}, "
+                    logger.info(f"对冲平仓 - 价格: {price_data['close']:.2f}, 盈利: {hedge_profit:.2f}, 手续费: {total_fee:.2f}, "
                                f"净盈利: {net_profit:.2f}, 期货账户余额: {self.future_cash:.2f}, 回撤: {future_drawdown:.2%}")
                     
                     # 添加交易原因
-                    if order.executed.price <= self.macd_hedge_take_profit:
-                        reason = f"MACD对冲止盈 - 盈利: {hedge_profit:.2f}"
-                    elif order.executed.price >= self.macd_hedge_stop_loss:
-                        reason = f"MACD对冲止损 - 亏损: {-hedge_profit:.2f}"
+                    if hedge_profit >= self.hedge_target_profit:
+                        reason = f"对冲止盈 - 盈利: {hedge_profit:.2f}, 目标: {self.hedge_target_profit:.2f}"
+                    elif hedge_profit <= -self.original_loss:
+                        reason = f"对冲止损 - 亏损: {-hedge_profit:.2f}, 上限: {self.original_loss:.2f}"
                     else:
-                        reason = "MACD对冲平仓"
+                        reason = "对冲平仓"
                     
                     # 计算收益率
-                    price_diff_percent = ((self.macd_hedge_entry_price - order.executed.price) / self.macd_hedge_entry_price) * 100
+                    price_diff_percent = ((self.hedge_entry_price - price_data['close']) / self.hedge_entry_price) * 100
                     
                     # 记录交易信息
                     order.info = {
                         'reason': reason,
+                        'original_loss': self.original_loss,
                         'hedge_profit': hedge_profit,
                         'net_profit': net_profit,
                         'future_cash': self.future_cash,
                         'execution_date': self.data.datetime.date(0),
-                        'total_value': self.future_cash,
-                        'position_value': 0,
-                        'position_ratio': 0.0,
-                        'etf_code': self.data1.contract_mapping[self.data1.datetime.datetime(0)],
-                        'pnl': hedge_profit,
-                        'return': price_diff_percent
+                        'total_value': self.future_cash,  # 添加期货账户总值
+                        'position_value': 0,  # 平仓后持仓价值为0
+                        'position_ratio': 0.0,  # 平仓后持仓比例为0
+                        'etf_code': self.data1.contract_mapping[self.data1.datetime.datetime(0)],  # 使用期货代码
+                        'pnl': hedge_profit,  # 添加盈亏
+                        'return': price_diff_percent  # 添加收益率
                     }
                     
-                    # 重置MACD对冲相关变量
-                    self.macd_hedge_position = None
-                    self.macd_hedge_entry_price = None
-                    self.macd_hedge_stop_loss = None
-                    self.macd_hedge_take_profit = None
-                    self.macd_hedge_order = None
+                    # 重置对冲相关变量
+                    self.hedge_position = None
+                    self.hedge_entry_price = None
+                    self.original_loss = None
+                    self.hedge_target_profit = None
+                    self.hedge_order = None
                     
                 else:  # 卖出豆粕期货（开空）
                     # 记录对冲持仓
-                    self.macd_hedge_position = order
+                    self.hedge_position = order
+                    self.hedge_entry_price = order.executed.price
+                    # 记录当前合约代码
+                    self.hedge_contract_code = self.data1.contract_mapping[self.data1.datetime.datetime(0)]
                     
                     # 计算保证金
                     margin = order.executed.price * order.executed.size * self.p.future_contract_multiplier * 0.10
                     
                     # 记录交易信息
                     order.info = {
-                        'reason': "MACD水上死叉开启对冲",
+                        'reason': f"开启对冲 - ETF止损损失: {self.original_loss:.2f}",
                         'margin': margin,
                         'future_cash': self.future_cash,
                         'execution_date': self.data.datetime.date(0),
-                        'total_value': self.future_cash,
-                        'position_value': abs(margin),
-                        'position_ratio': margin / self.future_cash if self.future_cash > 0 else 0,
-                        'etf_code': self.data1.contract_mapping[self.data1.datetime.datetime(0)],
-                        'pnl': 0,
-                        'return': 0
+                        'total_value': self.future_cash,  # 添加期货账户总值
+                        'position_value': abs(margin),  # 持仓价值为保证金
+                        'position_ratio': margin / self.future_cash if self.future_cash > 0 else 0,  # 计算持仓比例
+                        'etf_code': self.data1.contract_mapping[self.data1.datetime.datetime(0)],  # 使用期货代码
+                        'pnl': 0,  # 开仓时盈亏为0
+                        'return': 0  # 开仓时收益率为0
                     }
                     
-                    logger.info(f"MACD对冲开仓完成 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}手, 占用保证金: {margin:.2f}")
-                    self.macd_hedge_order = None
+                    logger.info(f"对冲开仓 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}手, 占用保证金: {margin:.2f}")
+                    self.hedge_order = None
                     
-                # 将MACD对冲订单也添加到订单列表
+                # 将期货订单也添加到订单列表
                 self._orders.append(order)
-                
-            elif is_hedge_order:
+            else:
                 # ETF订单处理
                 if order.isbuy():
                     # 买入订单执行后立即重置追踪止损，使用实际成交价
@@ -618,7 +590,7 @@ class DualMAHedgingStrategy(bt.Strategy):
                         total_position = current_position + order.executed.size
                         self.avg_cost = (current_value + new_value) / total_position
                         logger.info(f"当前持仓量: {current_position}, 当前持仓市值: {current_value}, 新买入市值: {new_value}, 总持仓量: {total_position}")
-    
+        
                     logger.info(f"买入平均成本: {self.avg_cost:.4f}")
                     # 记录入场价格用于计算止盈
                     self.entry_price = order.executed.price  # 保留最后一次买入价格
@@ -652,6 +624,10 @@ class DualMAHedgingStrategy(bt.Strategy):
                     etf_value = self.etf_cash + (self.position.size * self.data.close[0])
                     self.etf_highest_value = max(self.etf_highest_value, etf_value)
                     
+                    # 如果没有交易原因，添加默认原因
+                    if not self.trade_reason:
+                        self.trade_reason = "买入信号触发"
+                        
                     order.info = {'reason': self.trade_reason}  # 记录交易原因
                     # 计算总资产和持仓市值 - 使用成交价格而非最新价格，更准确反映交易时点
                     position_value = self.position.size * order.executed.price
@@ -710,6 +686,10 @@ class DualMAHedgingStrategy(bt.Strategy):
                     etf_value = self.etf_cash + (self.position.size * self.data.close[0] if self.position else 0)
                     self.etf_highest_value = max(self.etf_highest_value, etf_value)
                     
+                    # 如果没有交易原因，添加默认原因
+                    if not self.trade_reason:
+                        self.trade_reason = "卖出信号触发"
+                        
                     order.info = {'reason': self.trade_reason}  # 记录交易原因
                     # 计算总资产和持仓市值 - 使用成交价格
                     position_value = self.position.size * order.executed.price if self.position and self.position.size > 0 else 0
@@ -757,47 +737,42 @@ class DualMAHedgingStrategy(bt.Strategy):
 
     def stop(self):
         """策略结束时的汇总信息"""
-        # 计算ETF账户表现
-        etf_value = max(0, self.etf_cash)  # 确保ETF账户不为负
-        if self.position:
-            etf_value += self.position.size * self.data.close[0]
-        etf_returns = (etf_value / 100000.0) - 1.0
-        
-        # 计算期货账户表现
-        future_value = self.future_cash  # 期货账户现金
-        if self.hedge_position:  # 如果有期货持仓
-            # 计算期货持仓市值
-            current_hedge_price = self.data1.close[0]
-            hedge_price_diff = self.hedge_entry_price - current_hedge_price  # 空仓盈利 = 开仓价 - 当前价
-            hedge_profit = hedge_price_diff * self.hedge_position.size * self.p.future_contract_multiplier
-            # 加上保证金
-            margin = self.hedge_entry_price * abs(self.hedge_position.size) * self.p.future_contract_multiplier * 0.10
-            future_value = self.future_cash + margin + hedge_profit
+        try:
+            # 计算ETF账户表现
+            etf_value = max(0, self.etf_cash)  # 确保ETF账户不为负
+            if self.position:
+                etf_value += self.position.size * self.data.close[0]
+            etf_returns = (etf_value / 100000.0) - 1.0
             
-            # 记录最后一个对冲持仓的信息
-            logger.info(f"期货持仓结算 - 开仓价: {self.hedge_entry_price:.2f}, 当前价: {current_hedge_price:.2f}, "
-                      f"持仓量: {self.hedge_position.size}手, 浮动盈亏: {hedge_profit:.2f}, "
-                      f"保证金: {margin:.2f}, 总价值: {future_value:.2f}")
-        
-        future_returns = (future_value / 100000.0) - 1.0
-        
-        # 计算总体表现 - 两个账户初始资金总和为200,000
-        total_value = etf_value + future_value
-        total_initial = 200000.0
-        total_returns = (total_value / total_initial) - 1.0
-        
-        logger.info(f"===== 策略结束 =====")
-        logger.info(f"ETF账户: 初始资金 100000.00, 最终资金 {etf_value:.2f}, 收益率 {etf_returns:.2%}")
-        logger.info(f"期货账户: 初始资金 100000.00, 最终资金 {future_value:.2f}, 收益率 {future_returns:.2%}")
-        logger.info(f"总体表现: 初始资金 {total_initial:.2f}, 最终资金 {total_value:.2f}, 总收益率 {total_returns:.2%}")
-        
-        # 添加账户信息到broker的属性中，便于回测引擎获取
-        self.broker.etf_value = etf_value
-        self.broker.future_value = future_value
-        self.broker.total_value = total_value
-        self.broker.etf_returns = etf_returns
-        self.broker.future_returns = future_returns
-        self.broker.total_returns = total_returns
+            # 计算期货账户表现
+            future_returns = (self.future_cash / 100000.0) - 1.0
+            
+            # 计算总体表现 - 两个账户初始资金总和为200,000
+            total_value = etf_value + self.future_cash
+            total_initial = 200000.0
+            total_returns = (total_value / total_initial) - 1.0
+            
+            logger.info(f"===== 策略结束 =====")
+            logger.info(f"ETF账户: 初始资金 100000.00, 最终资金 {etf_value:.2f}, 收益率 {etf_returns:.2%}")
+            logger.info(f"期货账户: 初始资金 100000.00, 最终资金 {self.future_cash:.2f}, 收益率 {future_returns:.2%}")
+            logger.info(f"总体表现: 初始资金 {total_initial:.2f}, 最终资金 {total_value:.2f}, 总收益率 {total_returns:.2%}")
+            
+            # 添加账户信息到broker的属性中，便于回测引擎获取
+            self.broker.etf_value = etf_value
+            self.broker.future_value = self.future_cash
+            self.broker.total_value = total_value
+            self.broker.etf_returns = etf_returns
+            self.broker.future_returns = future_returns
+            self.broker.total_returns = total_returns
+        except Exception as e:
+            logger.error(f"策略结束时计算收益率出错: {str(e)}")
+            # 设置默认值避免除零错误
+            self.broker.etf_value = self.etf_cash
+            self.broker.future_value = self.future_cash
+            self.broker.total_value = self.etf_cash + self.future_cash
+            self.broker.etf_returns = -1.0
+            self.broker.future_returns = 0.0
+            self.broker.total_returns = -0.5
 
     def get_position_value_ratio(self):
         """计算当前持仓市值占总资产的比例"""
