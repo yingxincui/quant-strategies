@@ -70,6 +70,7 @@ class FutureDataLoader:
         except Exception as e:
             if "每分钟最多访问该接口300次" in str(e):
                 logger.warning("触发API限流")
+                time.sleep(60)
                 return self._make_api_request(func, *args, **kwargs)
             raise
             
@@ -155,7 +156,8 @@ class FutureDataLoader:
                 for _, contract in available_contracts.iterrows():
                     try:
                         # 获取合约的成交量数据
-                        df = self.pro.fut_daily(
+                        df = self._make_api_request(
+                            self.pro.fut_daily,
                             ts_code=contract['ts_code'],
                             start_date=current_date.strftime('%Y%m%d'),
                             end_date=(current_date + pd.Timedelta(days=5)).strftime('%Y%m%d'),
