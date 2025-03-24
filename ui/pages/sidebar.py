@@ -75,13 +75,13 @@ def render_sidebar():
             with col1:
                 fast_period = st.number_input("快线周期", value=5, min_value=1)
             with col2:
-                slow_period = st.number_input("慢线周期", value=13, min_value=1)
+                slow_period = st.number_input("慢线周期", value=10, min_value=1)
                 
             # 止损止盈参数
             st.subheader("止损止盈参数")
             col1, col2 = st.columns(2)
             with col1:
-                atr_multiplier = st.number_input("ATR倍数", value=1.0, min_value=0.5, max_value=5.0, step=0.1, 
+                atr_multiplier = st.number_input("ATR倍数", value=3.0, min_value=0.5, max_value=5.0, step=0.1, 
                                                help="ATR倍数用于计算止损距离，值越大止损距离越远")
             with col2:
                 atr_period = st.number_input("ATR周期", value=14, min_value=5, max_value=30, step=1)
@@ -105,6 +105,20 @@ def render_sidebar():
             with col2:
                 hedge_profit_multiplier = st.number_input("对冲盈利倍数", value=1.0, min_value=0.5, max_value=5.0, step=0.1,
                                                        help="对冲目标盈利 = 原始损失 × (1 + 盈利倍数)")
+            
+            # 对冲模块开关
+            st.subheader("对冲模块开关")
+            hedge_mode = st.radio(
+                "选择对冲模式",
+                ["无对冲", "ATR止损开空对冲", "MA交叉死叉做空对冲", "MACD零轴上方死叉做空对冲", "同步做多对冲"],
+                help="选择要启用的对冲模式，只能选择一种"
+            )
+            
+            # 根据选择设置对应的开关
+            enable_hedging = (hedge_mode == "ATR止损开空对冲")
+            enable_ma_cross_hedge = (hedge_mode == "MA交叉死叉做空对冲")
+            enable_macd_hedge = (hedge_mode == "MACD零轴上方死叉做空对冲")
+            enable_sync_long_hedge = (hedge_mode == "同步做多对冲")
         
         # ETF轮动策略参数
         if strategy_name == "ETF轮动策略":
@@ -174,6 +188,10 @@ def render_sidebar():
             'enable_death_cross': enable_death_cross if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
             'hedge_contract_size': hedge_contract_size if strategy_name == "双均线对冲策略" else None,
             'hedge_profit_multiplier': hedge_profit_multiplier if strategy_name == "双均线对冲策略" else None,
+            'enable_hedging': enable_hedging if strategy_name == "双均线对冲策略" else None,
+            'enable_ma_cross_hedge': enable_ma_cross_hedge if strategy_name == "双均线对冲策略" else None,
+            'enable_macd_hedge': enable_macd_hedge if strategy_name == "双均线对冲策略" else None,
+            'enable_sync_long_hedge': enable_sync_long_hedge if strategy_name == "双均线对冲策略" else None,
             'momentum_short': momentum_short if strategy_name == "ETF轮动策略" else None,
             'momentum_long': momentum_long if strategy_name == "ETF轮动策略" else None,
             'rebalance_interval': rebalance_interval if strategy_name == "ETF轮动策略" else None,

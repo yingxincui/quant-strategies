@@ -260,6 +260,10 @@ def render_backtest(params):
                     strategy_params.update({
                         'hedge_contract_size': params['hedge_contract_size'],
                         'hedge_profit_multiplier': params['hedge_profit_multiplier'],
+                        'enable_hedging': params['enable_hedging'],
+                        'enable_ma_cross_hedge': params['enable_ma_cross_hedge'],
+                        'enable_macd_hedge': params['enable_macd_hedge'],
+                        'enable_sync_long_hedge': params['enable_sync_long_hedge'],
                     })
                 
                 # 如果是ETF轮动策略，添加特定参数
