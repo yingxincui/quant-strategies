@@ -145,6 +145,10 @@ if strategy_name == "双均线策略":
 
 本系统仅供学习和研究使用，不构成任何投资建议。使用本系统进行实盘交易需要自行承担风险。
 
+## 其他
+如果你喜欢我的项目，可以给我买杯咖啡：
+<img src="https://github.com/user-attachments/assets/e75ef971-ff56-41e5-88b9-317595d22f81" alt="image" width="300" height="300">
+
 ## TODO List
 
 - [ ] 优化双均线对冲策略，解决期货爆仓问题
