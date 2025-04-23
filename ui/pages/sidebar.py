@@ -18,7 +18,7 @@ def render_sidebar():
         # 数据源设置
         st.subheader("数据源配置")
         if strategy_name in ["市场情绪策略", "双均线对冲策略"]:
-            tushare_token = st.text_input("Tushare Token（必填）", value="fb95c93a8669026e18f48134d12bf8df936a58e4a02b2fba6a173d65", type="password", help="市场情绪策略需要使用Tushare数据源")
+            tushare_token = st.text_input("Tushare Token（必填）", value="", type="password", help="市场情绪策略需要使用Tushare数据源")
             if not tushare_token:
                 st.error(f"{strategy_name}必须提供Tushare Token")
         else:
