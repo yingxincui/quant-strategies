@@ -250,7 +250,8 @@ def render_backtest(params):
                     strategy_params.update({
                         'fast_period': params['fast_period'],
                         'slow_period': params['slow_period'],
-                        'atr_multiplier': params['atr_multiplier'],
+                        'atr_loss_multiplier': params['atr_loss_multiplier'],
+                        'atr_profit_multiplier': params['atr_profit_multiplier'],
                         'enable_trailing_stop': params['enable_trailing_stop'],
                         'enable_death_cross': params['enable_death_cross'],
                     })

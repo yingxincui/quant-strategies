@@ -187,8 +187,8 @@ def backtest_etf_strategy(
         
         # 绘制投资组合价值图
         plt.figure(figsize=(15, 6))
-        plt.plot(df_asset.index, df_asset['portfolio_value'], label='ETF策略')
-        plt.title('ETF交易策略 - 投资组合价值')
+        plt.plot(df_asset.index, df_asset['portfolio_value'], label='量化策略')
+        plt.title('量化策略 - 投资组合价值')
         plt.xlabel('日期')
         plt.ylabel('价值($)')
         plt.grid(True)
@@ -204,10 +204,10 @@ def backtest_etf_strategy(
         
         # 绘制累积收益对比图
         plt.figure(figsize=(15, 6))
-        plt.plot(df_asset.index, df_asset['cumulative_return'] * 100, label='ETF策略')
+        plt.plot(df_asset.index, df_asset['cumulative_return'] * 100, label='量化策略')
         if 'benchmark_cumulative_return' in df_asset.columns:
             plt.plot(df_asset.index, df_asset['benchmark_cumulative_return'] * 100, label=market_benchmark, linestyle='--')
-        plt.title('ETF交易策略 vs 基准 - 累积收益率(%)')
+        plt.title('量化策略 vs 基准 - 累积收益率(%)')
         plt.xlabel('日期')
         plt.ylabel('累积收益率(%)')
         plt.grid(True)
@@ -227,7 +227,7 @@ def backtest_etf_strategy(
         # 绘制每日收益率分布图
         plt.figure(figsize=(15, 6))
         sns.histplot(df_asset['daily_return'].dropna() * 100, kde=True, bins=50)
-        plt.title('ETF交易策略 - 每日收益率分布(%)')
+        plt.title('量化策略 - 每日收益率分布(%)')
         plt.xlabel('每日收益率(%)')
         plt.ylabel('频率')
         plt.grid(True)
@@ -250,7 +250,7 @@ def backtest_etf_strategy(
             # 绘制热力图
             plt.figure(figsize=(15, 8))
             sns.heatmap(monthly_returns, annot=True, fmt=".2f", cmap="RdYlGn", cbar=True, linewidths=.5)
-            plt.title('ETF交易策略 - 月度收益率热力图(%)')
+            plt.title('量化策略 - 月度收益率热力图(%)')
             plt.xlabel('月份')
             plt.ylabel('年份')
             

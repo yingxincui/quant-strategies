@@ -18,7 +18,7 @@ def render_sidebar():
         # 数据源设置
         st.subheader("数据源配置")
         if strategy_name in ["市场情绪策略", "双均线对冲策略"]:
-            tushare_token = st.text_input("Tushare Token（必填）", value="", type="password", help="市场情绪策略需要使用Tushare数据源")
+            tushare_token = st.text_input("Tushare Token（必填）", value="fb95c93a8669026e18f48134d12bf8df936a58e4a02b2fba6a173d65", type="password", help="市场情绪策略需要使用Tushare数据源")
             if not tushare_token:
                 st.error(f"{strategy_name}必须提供Tushare Token")
         else:
@@ -81,9 +81,12 @@ def render_sidebar():
             st.subheader("止损止盈参数")
             col1, col2 = st.columns(2)
             with col1:
-                atr_multiplier = st.number_input("ATR倍数", value=3.0, min_value=0.5, max_value=5.0, step=0.1, 
-                                               help="ATR倍数用于计算止损距离，值越大止损距离越远")
+                atr_profit_multiplier = st.number_input("ATR止盈倍数", value=3.0, min_value=0.5, max_value=5.0, step=0.1,
+                                                     help="ATR止盈倍数，值越大止盈距离越远")
             with col2:
+                atr_loss_multiplier = st.number_input("ATR止损倍数", value=3.0, min_value=0.5, max_value=5.0, step=0.1,
+                                                   help="ATR止损倍数，值越大止损距离越远")
+            with col1:
                 atr_period = st.number_input("ATR周期", value=14, min_value=5, max_value=30, step=1)
                 
             # 其他技术参数
@@ -182,7 +185,8 @@ def render_sidebar():
             'symbol': symbol if strategy_name != "ETF轮动策略" else None,
             'fast_period': fast_period if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
             'slow_period': slow_period if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
-            'atr_multiplier': atr_multiplier if strategy_name in ["双均线策略", "双均线对冲策略", "ETF轮动策略"] else None,
+            'atr_profit_multiplier': atr_profit_multiplier if strategy_name in ["双均线策略", "双均线对冲策略", "ETF轮动策略"] else None,
+            'atr_loss_multiplier': atr_loss_multiplier if strategy_name in ["双均线策略", "双均线对冲策略", "ETF轮动策略"] else None,
             'atr_period': atr_period if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
             'enable_trailing_stop': enable_trailing_stop if strategy_name in ["双均线策略", "双均线对冲策略"] else None,
             'enable_death_cross': enable_death_cross if strategy_name in ["双均线策略", "双均线对冲策略"] else None,

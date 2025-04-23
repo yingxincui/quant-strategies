@@ -11,13 +11,13 @@ logger = setup_logger()
 
 # 设置页面
 st.set_page_config(
-    page_title="ETF策略回测系统",
+    page_title="量化策略回测系统",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 def main():
-    st.title("ETF策略回测系统")
+    st.title("量化策略回测系统")
     
     # 渲染侧边栏并获取参数
     params = render_sidebar()

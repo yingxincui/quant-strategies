@@ -33,8 +33,8 @@ class SyncLongHedge:
         try:
             # 计算ATR止盈止损价格
             current_atr = self.strategy.atr[0]
-            stop_loss = self.strategy.data1.close[0] - (current_atr * self.strategy.p.atr_multiplier)
-            take_profit = self.strategy.data1.close[0] + (current_atr * self.strategy.p.atr_multiplier)
+            stop_loss = self.strategy.data1.close[0] - (current_atr * self.strategy.p.atr_loss_multiplier)
+            take_profit = self.strategy.data1.close[0] + (current_atr * self.strategy.p.atr_profit_multiplier)
             
             # 开多豆粕期货
             hedge_size = self.strategy.p.hedge_contract_size
@@ -102,8 +102,8 @@ class SyncLongHedge:
         current_atr = self.strategy.atr[0]
         
         # 计算ATR止盈止损价格
-        stop_loss = self.hedge_entry_price - (current_atr * self.strategy.p.atr_multiplier)
-        take_profit = self.hedge_entry_price + (current_atr * self.strategy.p.atr_multiplier)
+        stop_loss = self.hedge_entry_price - (current_atr * self.strategy.p.atr_loss_multiplier)
+        take_profit = self.hedge_entry_price + (current_atr * self.strategy.p.atr_profit_multiplier)
         
         # 获取当前日期
         current_date = self.strategy.data.datetime.date(0)

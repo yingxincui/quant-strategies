@@ -15,7 +15,8 @@ class DualMAHedgingStrategy(bt.Strategy):
         ('max_drawdown', 0.15),   # 最大回撤限制
         ('price_limit', 0.10),    # 涨跌停限制(10%)
         ('enable_trailing_stop', False),  # 是否启用追踪止损
-        ('atr_multiplier', 1.0),  # ATR倍数
+        ('atr_profit_multiplier', 2.0),  # ATR止盈倍数
+        ('atr_loss_multiplier', 1.0),    # ATR止损倍数
         ('atr_period', 14),       # ATR周期
         ('enable_death_cross', False),  # 是否启用死叉卖出信号
         ('enable_hedging', False),  # 是否启用对冲功能
@@ -24,7 +25,7 @@ class DualMAHedgingStrategy(bt.Strategy):
         ('hedge_profit_multiplier', 1.0),  # 对冲盈利倍数
         ('future_contract_multiplier', 10),  # 期货合约乘数，豆粕为10吨/手
         ('verbose', False),          # 是否启用详细日志
-        ('crossover_threshold', 0.003),  # 快线上穿慢线的最小幅度阈值(0.3%)
+        ('crossover_threshold', 0.0015),  # 快线上穿慢线的最小幅度阈值(0.3%)
         ('volume_ratio_threshold', 1.02),  # 量能放大阈值(1.02倍)
         ('volume_surge_threshold', 2.1),  # 量能暴增阈值(2倍)
         ('margin_ratio', 0.95),     # 保证金比例(95%)
@@ -75,8 +76,8 @@ class DualMAHedgingStrategy(bt.Strategy):
         self.future_highest_value = self.future_cash
         
         # 记录初始账户状态
-        logger.info(f"账户初始化 - ETF账户: {self.etf_cash:.2f}, 期货账户: {self.future_cash:.2f}, "
-                  f"总初始资金: {self.etf_cash + self.future_cash:.2f}")
+        logger.info(f"账户初始化 - ETF账户: {self.etf_cash:.4f}, 期货账户: {self.future_cash:.4f}, "
+                  f"总初始资金: {self.etf_cash + self.future_cash:.4f}")
         
         # 移动平均线指标
         self.fast_ma = bt.indicators.SMA(
@@ -192,7 +193,7 @@ class DualMAHedgingStrategy(bt.Strategy):
         if shares * price > cash:
             shares = self.round_shares(cash / price)
             
-        logger.info(f"计算持仓 - ATR: {current_atr:.2f}, 每股风险: {risk_per_share:.2f}, 总风险金额: {risk_amount:.2f}, 计算股数: {shares}, ETF可用资金: {cash:.2f}")
+        logger.info(f"计算持仓 - ATR: {current_atr:.4f}, 每股风险: {risk_per_share:.4f}, 总风险金额: {risk_amount:.4f}, 计算股数: {shares}, ETF可用资金: {cash:.4f}")
         
         return shares if shares >= 100 else 0
 
@@ -220,8 +221,8 @@ class DualMAHedgingStrategy(bt.Strategy):
             self.original_loss = abs(loss_amount)
             self.hedge_target_profit = self.original_loss * (1 + self.p.hedge_profit_multiplier)
             
-            logger.info(f"对冲参数计算 - 原始损失: {loss_amount:.2f}, 取绝对值: {self.original_loss:.2f}, "
-                      f"目标盈利: {self.hedge_target_profit:.2f}, 盈利倍数: {self.p.hedge_profit_multiplier}")
+            logger.info(f"对冲参数计算 - 原始损失: {loss_amount:.4f}, 取绝对值: {self.original_loss:.4f}, "
+                      f"目标盈利: {self.hedge_target_profit:.4f}, 盈利倍数: {self.p.hedge_profit_multiplier}")
             
             # 对冲合约规模
             hedge_size = self.p.hedge_contract_size
@@ -231,7 +232,7 @@ class DualMAHedgingStrategy(bt.Strategy):
             margin_requirement = future_price * hedge_size * self.p.future_contract_multiplier * self.p.m_margin_ratio  # 10%保证金
             
             if margin_requirement > self.future_cash:
-                logger.warning(f"期货账户资金不足，需要{margin_requirement:.2f}，当前可用{self.future_cash:.2f}")
+                logger.warning(f"期货账户资金不足，需要{margin_requirement:.4f}，当前可用{self.future_cash:.4f}")
                 # 根据可用资金调整手数
                 adjusted_size = int(self.future_cash / (future_price * self.p.future_contract_multiplier * self.p.m_margin_ratio))
                 if adjusted_size < 1:
@@ -260,11 +261,11 @@ class DualMAHedgingStrategy(bt.Strategy):
             pre_future_cash = self.future_cash
             self.future_cash -= actual_margin
             
-            logger.info(f"期货资金变动 - 对冲前资金: {pre_future_cash:.2f}, 占用保证金: {actual_margin:.2f}, 对冲后资金: {self.future_cash:.2f}")
+            logger.info(f"期货资金变动 - 对冲前资金: {pre_future_cash:.4f}, 占用保证金: {actual_margin:.4f}, 对冲后资金: {self.future_cash:.4f}")
             
-            logger.info(f"开启对冲 - 开空{actual_hedge_size}手豆粕期货, 入场价: {self.hedge_entry_price:.2f}, "
-                      f"原始损失: {self.original_loss:.2f}, 目标盈利: {self.hedge_target_profit:.2f}, "
-                      f"占用保证金: {actual_margin:.2f}, 剩余期货资金: {self.future_cash:.2f}")
+            logger.info(f"开启对冲 - 开空{actual_hedge_size}手豆粕期货, 入场价: {self.hedge_entry_price:.4f}, "
+                      f"原始损失: {self.original_loss:.4f}, 目标盈利: {self.hedge_target_profit:.4f}, "
+                      f"占用保证金: {actual_margin:.4f}, 剩余期货资金: {self.future_cash:.4f}")
             
         except Exception as e:
             logger.error(f"对冲开仓失败: {str(e)}")
@@ -291,21 +292,21 @@ class DualMAHedgingStrategy(bt.Strategy):
             hedge_price_diff = self.hedge_entry_price - current_hedge_price  # 空仓盈利 = 开仓价 - 当前价
             hedge_profit = hedge_price_diff * self.hedge_position.size * self.p.future_contract_multiplier
             
-            logger.info(f"对冲持仓检查 - 当前价格: {current_hedge_price:.2f}, 入场价: {self.hedge_entry_price:.2f}, "
-                      f"价差: {hedge_price_diff:.2f}, 手数: {self.hedge_position.size}, 合约乘数: {self.p.future_contract_multiplier}, "
-                      f"当前盈利: {hedge_profit:.2f}, 目标盈利: {self.hedge_target_profit:.2f}")
+            logger.info(f"对冲持仓检查 - 当前价格: {current_hedge_price:.4f}, 入场价: {self.hedge_entry_price:.4f}, "
+                      f"价差: {hedge_price_diff:.4f}, 手数: {self.hedge_position.size}, 合约乘数: {self.p.future_contract_multiplier}, "
+                      f"当前盈利: {hedge_profit:.4f}, 目标盈利: {self.hedge_target_profit:.4f}")
             
             # 如果达到止盈目标，平掉对冲仓位
             if hedge_profit >= self.hedge_target_profit:
                 if self.hedge_order is None:  # 确保没有未完成订单
                     self.hedge_order = self.close(data=self.data1)
-                    logger.info(f"对冲止盈下单 - 当前盈利: {hedge_profit:.2f}, 目标盈利: {self.hedge_target_profit:.2f}")
+                    logger.info(f"对冲止盈下单 - 当前盈利: {hedge_profit:.4f}, 目标盈利: {self.hedge_target_profit:.4f}")
             
             # 对冲止损逻辑 - 当亏损等于原始亏损金额时止损
             elif hedge_profit <= -self.original_loss:
                 if self.hedge_order is None:  # 确保没有未完成订单
                     self.hedge_order = self.close(data=self.data1)
-                    logger.info(f"对冲止损下单 - 当前亏损: {-hedge_profit:.2f}, 原始亏损: {self.original_loss:.2f}")
+                    logger.info(f"对冲止损下单 - 当前亏损: {-hedge_profit:.4f}, 原始亏损: {self.original_loss:.4f}")
         
         # 计算当前回撤
         etf_value = self.etf_cash
@@ -320,9 +321,9 @@ class DualMAHedgingStrategy(bt.Strategy):
         
         # 更新日志内容以便跟踪资金情况
         if self.position or self.p.verbose:
-            logger.info(f"账户状态 - ETF资金: {self.etf_cash:.2f}, 期货资金: {self.future_cash:.2f}, "
-                      f"ETF持仓: {self.position.size if self.position else 0}, ETF价格: {self.data.close[0]:.2f}, "
-                      f"ETF账户总值: {etf_value:.2f}, ETF回撤: {etf_drawdown:.2%}")
+            logger.info(f"账户状态 - ETF资金: {self.etf_cash:.4f}, 期货资金: {self.future_cash:.4f}, "
+                      f"ETF持仓: {self.position.size if self.position else 0}, ETF价格: {self.data.close[0]:.4f}, "
+                      f"ETF账户总值: {etf_value:.4f}, ETF回撤: {etf_drawdown:.2%}")
         
         # 检查是否触及涨跌停
         if not self.check_price_limit(self.data.close[0]):
@@ -337,7 +338,7 @@ class DualMAHedgingStrategy(bt.Strategy):
                 
         # 检查死叉信号 - 触发MA交叉对冲开空
         if self.crossover == -1:  # 只在刚发生死叉的那一天触发，而不是死叉后的每一天
-            logger.info(f"检测到ETF死叉信号 - 快线: {self.fast_ma[0]:.2f}, 慢线: {self.slow_ma[0]:.2f}")
+            logger.info(f"检测到ETF死叉信号 - 快线: {self.fast_ma[0]:.4f}, 慢线: {self.slow_ma[0]:.4f}")
             self.ma_cross_hedge.on_death_cross()
             
         # 检查MACD死叉信号 - 触发MACD对冲开空
@@ -345,93 +346,85 @@ class DualMAHedgingStrategy(bt.Strategy):
             self.macd_hedge.on_death_cross()                    
         
         if not self.position:  # 没有持仓
-            # 计算快线上穿慢线的幅度
+            # 1. 精确金叉判定
+            crossover_occurred = (self.fast_ma[0] > self.slow_ma[0] and 
+                                 self.fast_ma[-1] <= self.slow_ma[-1])
+            
+            # 2. 交叉幅度计算（线性插值法）
             crossover_pct = 0
-            if self.last_fast_ma is not None and self.last_slow_ma is not None:
-                crossover_pct = (self.fast_ma[0] - self.slow_ma[0]) / self.slow_ma[0]
+            if crossover_occurred:
+                denominator = (self.fast_ma[0] - self.fast_ma[-1]) - (self.slow_ma[0] - self.slow_ma[-1])
+                if denominator != 0:
+                    alpha = (self.slow_ma[-1] - self.fast_ma[-1]) / denominator
+                    crossover_price = self.fast_ma[-1] + alpha*(self.fast_ma[0]-self.fast_ma[-1])
+                    crossover_pct = abs(crossover_price - self.slow_ma[0])/self.slow_ma[0]
+                    logger.info(f"金叉检测 - 交叉价格: {crossover_price:.4f}, 交叉幅度: {crossover_pct:.4%}")
             
-            # 更新上一次的移动平均线值
-            self.last_fast_ma = self.fast_ma[0]
-            self.last_slow_ma = self.slow_ma[0]
-            
-            if self.crossover > 0:  # 金叉，买入信号
-                # 检查上穿幅度是否满足阈值要求
-                if crossover_pct > self.p.crossover_threshold:
-                    # 检查量能是否大于5日均量
-                    current_volume = self.data.volume[0]
-                    prev_volume = sum([self.data.volume[-i] for i in range(6)]) / 6
+            # 3. 多层次条件验证
+            if crossover_occurred:
+                # 计算成交量条件
+                current_volume = self.data.volume[0]
+                prev_volume = sum([self.data.volume[-i] for i in range(1, 8)]) / 7
+                volume_condition = current_volume > self.p.volume_ratio_threshold * prev_volume
+                
+                # 计算周趋势（5日均线斜率）
+                weekly_trend = self.fast_ma[0] > self.fast_ma[-5]
+                
+                # 成交量上升趋势（3日）
+                volume_uptrend = (self.data.volume[0] > self.data.volume[-1] and 
+                                 self.data.volume[-1] > self.data.volume[-2])
+                
+                if (crossover_pct >= self.p.crossover_threshold and
+                    volume_condition and
+                    volume_uptrend and
+                    weekly_trend):
                     
-                    if current_volume > self.p.volume_ratio_threshold * prev_volume:
-                        shares = self.calculate_trade_size(current_price)
+                    shares = self.calculate_trade_size(self.data.close[0])
+                    
+                    if shares >= 100:  # 确保至少有100股
+                        # 计算实际所需资金（包括手续费）
+                        required_cash = shares * self.data.close[0] * 1.0003
                         
-                        if shares >= 100:  # 确保至少有100股
-                            # 计算实际所需资金（包括手续费）
-                            required_cash = shares * current_price * 1.0003  # 包含0.03%手续费
-                            
-                            # 确保有足够资金
-                            if required_cash > self.etf_cash * self.p.margin_ratio:
-                                # 根据实际可用资金调整交易规模
-                                adjusted_shares = int(self.etf_cash * self.p.margin_ratio / current_price / 1.0003 / 100) * 100
-                                if adjusted_shares >= 100:
-                                    shares = adjusted_shares
-                                    logger.warning(f"资金不足，已调整交易规模 - 原始: {shares}, 调整后: {adjusted_shares}")
-                                else:
-                                    logger.warning(f"资金不足以买入最低交易单位(100股) - 可用: {self.etf_cash:.2f}, 需要: {required_cash:.2f}")
-                                    return
-                        
-                            self.trade_reason = f"快线上穿慢线 ({self.p.fast_period}日均线上穿{self.p.slow_period}日均线), 上穿幅度: {crossover_pct:.4%}, 量能放大: {current_volume/prev_volume:.2f}倍"
+                        # 确保有足够资金
+                        if required_cash <= self.etf_cash * self.p.margin_ratio:
+                            self.trade_reason = (
+                                f"金叉信号 - 交叉幅度: {crossover_pct:.4%}, "
+                                f"量能比: {current_volume/prev_volume:.2f}, "
+                                f"周趋势: {'上升' if weekly_trend else '下降'}"
+                            )
                             self.order = self.buy(size=shares)
                             if self.order:
                                 # 记录买入日期和价格
                                 self.buy_dates.add(self.data.datetime.date())
-                                self.entry_price = current_price
-                                logger.info(f"买入信号 - 数量: {shares}, 价格: {current_price:.2f}, 可用资金: {self.etf_cash:.2f}, 风险比例: {self.p.risk_ratio:.2%}, 上穿幅度: {crossover_pct:.4%}, 量能放大: {current_volume/prev_volume:.2f}倍")
+                                self.entry_price = self.data.close[0]
+                                logger.info(
+                                    f"买入信号触发 - 价格: {self.data.close[0]:.4f}, "
+                                    f"数量: {shares}, ATR: {self.atr[0]:.4f}, "
+                                    f"交叉幅度: {crossover_pct:.4%}, "
+                                    f"量能比: {current_volume/prev_volume:.2f}"
+                                )
                                 # 触发同步做多对冲
                                 self.sync_long_hedge.on_golden_cross()
+                        else:
+                            logger.warning(f"资金不足 - 需要: {required_cash:.4f}, 可用: {self.etf_cash * self.p.margin_ratio:.4f}")
                     else:
-                        logger.info(f"量能不足 - 当前量能: {current_volume}, 前一日量能: {prev_volume}, 量能比: {current_volume/prev_volume:.2f}")
+                        if not volume_condition:
+                            logger.info(f"量能不足 - 当前: {current_volume}, 均量: {prev_volume:.0f}")
+                        if not volume_uptrend:
+                            logger.info("成交量未持续上升")
+                        if not weekly_trend:
+                            logger.info("周趋势不佳")
+                        if crossover_pct < self.p.crossover_threshold:
+                            logger.info(f"交叉幅度不足 - {crossover_pct:.4%} < {self.p.crossover_threshold:.4%}")
                 else:
-                    logger.info(f"上穿幅度不足 - 当前幅度: {crossover_pct:.4%}, 最小要求: {self.p.crossover_threshold:.4%}")
-            
-            # 新增：量能暴增且均线多头向上开仓条件
-            current_volume = self.data.volume[0]
-            prev_volume = self.data.volume[-1]
-            
-            # 检查量能是否超过前一日两倍
-            if current_volume > self.p.volume_surge_threshold * prev_volume:
-                # 检查快慢均线是否多头向上
-                fast_ma_up = self.fast_ma[0] > self.fast_ma[-1]
-                slow_ma_up = self.slow_ma[0] > self.slow_ma[-1]
-                
-                if fast_ma_up and slow_ma_up:
-                    shares = self.calculate_trade_size(current_price)
-                    
-                    if shares >= 100:  # 确保至少有100股
-                        # 计算实际所需资金（包括手续费）
-                        required_cash = shares * current_price * 1.0003  # 包含0.03%手续费
-                        
-                        # 确保有足够资金
-                        if required_cash > self.etf_cash * self.p.margin_ratio:
-                            # 根据实际可用资金调整交易规模
-                            adjusted_shares = int(self.etf_cash * self.p.margin_ratio / current_price / 1.0003 / 100) * 100
-                            if adjusted_shares >= 100:
-                                shares = adjusted_shares
-                                logger.warning(f"资金不足，已调整交易规模 - 原始: {shares}, 调整后: {adjusted_shares}")
-                            else:
-                                logger.warning(f"资金不足以买入最低交易单位(100股) - 可用: {self.etf_cash:.2f}, 需要: {required_cash:.2f}")
-                                return
-                    
-                        self.trade_reason = f"量能暴增且均线多头向上 - 量能放大: {current_volume/prev_volume:.2f}倍, 快线: {self.fast_ma[0]:.2f}↑{self.fast_ma[-1]:.2f}, 慢线: {self.slow_ma[0]:.2f}↑{self.slow_ma[-1]:.2f}"
-                        self.order = self.buy(size=shares)
-                        if self.order:
-                            # 记录买入日期和价格
-                            self.buy_dates.add(self.data.datetime.date())
-                            self.entry_price = current_price
-                            logger.info(f"买入信号 - 数量: {shares}, 价格: {current_price:.2f}, 可用资金: {self.etf_cash:.2f}, 风险比例: {self.p.risk_ratio:.2%}, 量能放大: {current_volume/prev_volume:.2f}倍")
-                            # 触发同步做多对冲
-                            self.sync_long_hedge.on_golden_cross()
-                else:
-                    logger.info(f"均线未多头向上 - 快线: {self.fast_ma[0]:.2f} vs {self.fast_ma[-1]:.2f}, 慢线: {self.slow_ma[0]:.2f} vs {self.slow_ma[-1]:.2f}")
+                    if not volume_condition:
+                        logger.info(f"量能不足 - 当前: {current_volume}, 均量: {prev_volume:.0f}")
+                    if not volume_uptrend:
+                        logger.info("成交量未持续上升")
+                    if not weekly_trend:
+                        logger.info("周趋势不佳")
+                    if crossover_pct < self.p.crossover_threshold:
+                        logger.info(f"交叉幅度不足 - {crossover_pct:.4%} < {self.p.crossover_threshold:.4%}")
         
         else:  # 有持仓
             # 检查是否可以卖出（T+1规则）
@@ -441,21 +434,21 @@ class DualMAHedgingStrategy(bt.Strategy):
                 
             # 计算ATR止盈止损价格
             current_atr = self.atr[0]
-            stop_loss = self.entry_price - (current_atr * self.p.atr_multiplier)
-            take_profit = self.entry_price + (current_atr * self.p.atr_multiplier)
+            stop_loss = self.entry_price - (current_atr * self.p.atr_loss_multiplier)
+            take_profit = self.entry_price + (current_atr * self.p.atr_profit_multiplier)
             
             # 获取追踪止损价格（如果启用）
             trailing_stop_price = None
             if self.p.enable_trailing_stop:
                 trailing_stop_price = self.trailing_stop[0]
             
-            logger.info(f"持仓检查 - 今天日期: {current_date}, 当前价格: {current_price:.2f}, ATR止损: {stop_loss:.2f}, ATR止盈: {take_profit:.2f}")
+            logger.info(f"持仓检查 - 今天日期: {current_date}, 当前价格: {current_price:.4f}, ATR止损: {stop_loss:.4f}, ATR止盈: {take_profit:.4f}")
             
             if self.p.enable_death_cross and self.crossover < 0:  # 死叉，卖出信号
                 self.trade_reason = f"快线下穿慢线 ({self.p.fast_period}日均线下穿{self.p.slow_period}日均线)"
                 self.order = self.close()
                 if self.order:
-                    logger.info(f"卖出信号 - 价格: {current_price:.2f}")
+                    logger.info(f"卖出信号 - 价格: {current_price:.4f}")
                     # 触发同步做多对冲平仓
                     self.sync_long_hedge.on_etf_close()
             
@@ -467,9 +460,9 @@ class DualMAHedgingStrategy(bt.Strategy):
                 
                 # 详细记录损失计算
                 logger.info(f"计算止损损失 - 入场价: {self.entry_price:.4f}, 当前价: {current_price:.4f}, "
-                         f"每股损失: {actual_loss_per_share:.4f}, 持仓量: {self.position.size}, 总损失: {loss_amount:.2f}")
+                         f"每股损失: {actual_loss_per_share:.4f}, 持仓量: {self.position.size}, 总损失: {loss_amount:.4f}")
                 
-                self.trade_reason = f"触发ATR止损 (止损价: {stop_loss:.2f})"
+                self.trade_reason = f"触发ATR止损 (止损价: {stop_loss:.4f})"
                 self.order = self.close()
                 
                 # 记录ATR止损触发前的数据
@@ -477,8 +470,8 @@ class DualMAHedgingStrategy(bt.Strategy):
                 pre_loss_future_cash = self.future_cash
                 
                 if self.order:
-                    logger.info(f"ATR止损触发 - 当前价格: {current_price:.2f}, 止损价: {stop_loss:.2f}, "
-                              f"损失金额: {loss_amount:.2f}, ETF账户当前余额: {self.etf_cash:.2f}, 期货账户余额: {self.future_cash:.2f}")
+                    logger.info(f"ATR止损触发 - 当前价格: {current_price:.4f}, 止损价: {stop_loss:.4f}, "
+                              f"损失金额: {loss_amount:.4f}, ETF账户当前余额: {self.etf_cash:.4f}, 期货账户余额: {self.future_cash:.4f}")
                     
                     # 开启对冲 - 但不应该直接影响ETF账户资金
                     self.hedge(loss_amount)
@@ -490,12 +483,12 @@ class DualMAHedgingStrategy(bt.Strategy):
                 commission = position_value * 0.0003  # 0.03%手续费
                 
                 if self.etf_cash >= commission:
-                    self.trade_reason = f"触发ATR止盈 (止盈价: {take_profit:.2f})"
+                    self.trade_reason = f"触发ATR止盈 (止盈价: {take_profit:.4f})"
                     self.order = self.close()
                     if self.order:
-                        logger.info(f"ATR止盈触发 - 当前价格: {current_price:.2f}, 止盈价: {take_profit:.2f}")
+                        logger.info(f"ATR止盈触发 - 当前价格: {current_price:.4f}, 止盈价: {take_profit:.4f}")
                 else:
-                    logger.warning(f"资金不足支付手续费，无法平仓 - 需要: {commission:.2f}, 可用: {self.etf_cash:.2f}")
+                    logger.warning(f"资金不足支付手续费，无法平仓 - 需要: {commission:.4f}, 可用: {self.etf_cash:.4f}")
             
             # 追踪止损检查（如果启用）
             elif self.p.enable_trailing_stop and current_price < trailing_stop_price:
@@ -504,12 +497,12 @@ class DualMAHedgingStrategy(bt.Strategy):
                 commission = position_value * 0.0003  # 0.03%手续费
                 
                 if self.etf_cash >= commission:
-                    self.trade_reason = f"触发追踪止损 (止损价: {trailing_stop_price:.2f})"
+                    self.trade_reason = f"触发追踪止损 (止损价: {trailing_stop_price:.4f})"
                     self.order = self.close()
                     if self.order:
-                        logger.info(f"追踪止损触发 - 当前价格: {current_price:.2f}, 止损价: {trailing_stop_price:.2f}, 最高价: {self.trailing_stop.max_price:.2f}")
+                        logger.info(f"追踪止损触发 - 当前价格: {current_price:.4f}, 止损价: {trailing_stop_price:.4f}, 最高价: {self.trailing_stop.max_price:.4f}")
                 else:
-                    logger.warning(f"资金不足支付手续费，无法平仓 - 需要: {commission:.2f}, 可用: {self.etf_cash:.2f}")
+                    logger.warning(f"资金不足支付手续费，无法平仓 - 需要: {commission:.4f}, 可用: {self.etf_cash:.4f}")
 
         # 检查所有对冲模块的平仓条件
         self.ma_cross_hedge.check_exit()
@@ -566,7 +559,7 @@ class DualMAHedgingStrategy(bt.Strategy):
                     
                     # 检查是否有足够资金，如果没有，调整交易规模
                     if total_cost > self.etf_cash:
-                        logger.warning(f"ETF账户资金不足，需要{total_cost:.2f}，当前可用{self.etf_cash:.2f}，将只使用可用资金")
+                        logger.warning(f"ETF账户资金不足，需要{total_cost:.4f}，当前可用{self.etf_cash:.4f}，将只使用可用资金")
                         # 这种情况理论上不应该发生，因为计算交易大小时已经考虑了资金限制
                         # 但为了安全，这里再次检查并确保不会出现负值
                         self.etf_cash = 0  # 最多用完所有资金
@@ -575,8 +568,8 @@ class DualMAHedgingStrategy(bt.Strategy):
                     
                     # 详细记录资金变动
                     logger.info(f"ETF买入资金结算 - 买入数量: {order.executed.size}, 价格: {order.executed.price:.4f}, "
-                              f"总值: {trade_value:.2f}, 手续费: {commission:.2f}, 总成本: {total_cost:.2f}, "
-                              f"变动前余额: {pre_cash:.2f}, 变动后余额: {self.etf_cash:.2f}")
+                              f"总值: {trade_value:.4f}, 手续费: {commission:.4f}, 总成本: {total_cost:.4f}, "
+                              f"变动前余额: {pre_cash:.4f}, 变动后余额: {self.etf_cash:.4f}")
                     
                     # 更新ETF账户最高净值
                     etf_value = self.etf_cash + (self.position.size * self.data.close[0])
@@ -599,9 +592,9 @@ class DualMAHedgingStrategy(bt.Strategy):
                     order.info['execution_date'] = self.data.datetime.date(0)  # 添加执行日期
                     order.info['etf_cash'] = self.etf_cash  # 添加ETF账户现金
                     self._orders.append(order)  # 添加到订单列表
-                    logger.info(f'买入执行 - 价格: {order.executed.price:.2f}, 数量: {order.executed.size}, '
-                              f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {self.avg_cost:.2f}, '
-                              f'ETF账户余额: {self.etf_cash:.2f}, ETF总资产: {total_etf_value:.2f}, 原因: {self.trade_reason}')
+                    logger.info(f'买入执行 - 价格: {order.executed.price:.4f}, 数量: {order.executed.size}, '
+                              f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {self.avg_cost:.4f}, '
+                              f'ETF账户余额: {self.etf_cash:.4f}, ETF总资产: {total_etf_value:.4f}, 原因: {self.trade_reason}')
                 else:
                     # 卖出 - 更新持仓相关指标
                     # 记录卖出前的平均成本（用于日志记录）
@@ -620,12 +613,12 @@ class DualMAHedgingStrategy(bt.Strategy):
                     
                     # 详细记录资金变动
                     logger.info(f"ETF卖出资金结算 - 卖出数量: {abs(order.executed.size)}, 价格: {order.executed.price:.4f}, "
-                              f"总值: {trade_value:.2f}, 手续费: {commission:.2f}, 净收入: {net_proceeds:.2f}, "
-                              f"变动前余额: {pre_cash:.2f}, 变动后余额: {self.etf_cash:.2f}")
+                              f"总值: {trade_value:.4f}, 手续费: {commission:.4f}, 净收入: {net_proceeds:.4f}, "
+                              f"变动前余额: {pre_cash:.4f}, 变动后余额: {self.etf_cash:.4f}")
                     
                     # 确保账户资金永远不会为负
                     if self.etf_cash < 0:
-                        logger.error(f"ETF账户出现负值：{self.etf_cash:.2f}，已重置为0，请检查资金计算逻辑")
+                        logger.error(f"ETF账户出现负值：{self.etf_cash:.4f}，已重置为0，请检查资金计算逻辑")
                         self.etf_cash = 0
                     
                     if not self.position or self.position.size == 0:  # 如果全部平仓
@@ -669,13 +662,13 @@ class DualMAHedgingStrategy(bt.Strategy):
                     profit_pct = ((order.executed.price / last_avg_cost) - 1.0) * 100 if last_avg_cost and order.executed.price else 0
                     
                     # 格式化价格和成本
-                    price_str = f"{order.executed.price:.2f}" if order.executed.price else "N/A"
+                    price_str = f"{order.executed.price:.4f}" if order.executed.price else "N/A"
                     cost_str = f"{last_avg_cost:.4f}" if last_avg_cost else "N/A"
                     
                     logger.info(f'卖出执行 - 价格: {price_str}, 数量: {position_size}, '
                               f'仓位比例: {self.current_position_ratio:.2%}, 平均成本: {cost_str}, '
-                              f'收益: {profit:.2f}, 收益率: {profit_pct:.2f}%, ETF账户余额: {self.etf_cash:.2f}, '
-                              f'ETF总资产: {total_etf_value:.2f}, 原因: {self.trade_reason}')
+                              f'收益: {profit:.4f}, 收益率: {profit_pct:.4f}%, ETF账户余额: {self.etf_cash:.4f}, '
+                              f'ETF总资产: {total_etf_value:.4f}, 原因: {self.trade_reason}')
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             # 检查是否是对冲订单
             is_hedge_order = (order.data == self.data1)
@@ -696,10 +689,10 @@ class DualMAHedgingStrategy(bt.Strategy):
                     # 如果总资产足够，说明是保证金计算问题
                     if total_value >= position_value * 1.0003:  # 考虑0.03%手续费
                         # 强制平仓，使用市价
-                        logger.warning(f"保证金不足但总资产足够，尝试强制平仓 - 持仓市值: {position_value:.2f}, 总资产: {total_value:.2f}")
+                        logger.warning(f"保证金不足但总资产足够，尝试强制平仓 - 持仓市值: {position_value:.4f}, 总资产: {total_value:.4f}")
                         self.order = self.close()
                     else:
-                        logger.error(f"保证金不足且总资产不足 - 持仓市值: {position_value:.2f}, 总资产: {total_value:.2f}")
+                        logger.error(f"保证金不足且总资产不足 - 持仓市值: {position_value:.4f}, 总资产: {total_value:.4f}")
                 else:
                     logger.warning(f'订单失败 - 状态: {order.getstatusname()}')
             
@@ -737,9 +730,9 @@ class DualMAHedgingStrategy(bt.Strategy):
             total_returns = (total_value / total_initial) - 1.0
             
             logger.info(f"===== 策略结束 =====")
-            logger.info(f"ETF账户: 初始资金 {self.p.initial_cash:.2f}, 最终资金 {etf_value:.2f}, 收益率 {etf_returns:.2%}")
-            logger.info(f"期货账户: 初始资金 {self.p.initial_cash:.2f}, 最终资金 {self.future_cash:.2f}, 收益率 {future_returns:.2%}")
-            logger.info(f"总体表现: 初始资金 {total_initial:.2f}, 最终资金 {total_value:.2f}, 总收益率 {total_returns:.2%}")
+            logger.info(f"ETF账户: 初始资金 {self.p.initial_cash:.4f}, 最终资金 {etf_value:.4f}, 收益率 {etf_returns:.2%}")
+            logger.info(f"期货账户: 初始资金 {self.p.initial_cash:.4f}, 最终资金 {self.future_cash:.4f}, 收益率 {future_returns:.2%}")
+            logger.info(f"总体表现: 初始资金 {total_initial:.4f}, 最终资金 {total_value:.4f}, 总收益率 {total_returns:.2%}")
             
             # 添加账户信息到broker的属性中，便于回测引擎获取
             self.broker.etf_value = etf_value

@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class ETFStrategyAnalyzer:
-    """ETF策略分析器类，提供全面的策略绩效分析功能"""
+    """量化策略分析器类，提供全面的策略绩效分析功能"""
     
     def __init__(
         self,
@@ -31,7 +31,7 @@ class ETFStrategyAnalyzer:
         risk_free_rate: float = 0.03,      # 年化无风险利率（默认3%）
     ):
         """
-        初始化ETF策略分析器
+        初始化量化策略分析器
         
         参数:
             results_dir: 结果数据目录路径
@@ -470,7 +470,7 @@ def analyze_etf_strategy(
     if results_dir is None:
         results_dir = os.path.dirname(strategy_file)
     
-    logger.info(f"开始分析ETF策略: {os.path.basename(strategy_file)}")
+    logger.info(f"开始分析量化策略: {os.path.basename(strategy_file)}")
     
     # 创建分析器实例
     analyzer = ETFStrategyAnalyzer(
@@ -487,7 +487,7 @@ def analyze_etf_strategy(
     metrics = analyzer.generate_performance_report()
     
     # 打印主要绩效指标
-    logger.info("ETF策略绩效摘要:")
+    logger.info("量化策略绩效摘要:")
     logger.info(f"年化收益率: {metrics['annual_return']:.2%} (基准: {metrics['benchmark_annual_return']:.2%})")
     logger.info(f"最大回撤: {metrics['max_drawdown']:.2%} (基准: {metrics['benchmark_max_drawdown']:.2%})")
     logger.info(f"夏普比率: {metrics['sharpe_ratio']:.2f} (基准: {metrics['benchmark_sharpe_ratio']:.2f})")
@@ -500,7 +500,7 @@ def analyze_etf_strategy(
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='ETF策略绩效分析工具')
+    parser = argparse.ArgumentParser(description='量化策略绩效分析工具')
     parser.add_argument('--strategy_file', type=str, required=True,
                       help='策略回测结果文件路径')
     parser.add_argument('--benchmark_file', type=str, default=None,

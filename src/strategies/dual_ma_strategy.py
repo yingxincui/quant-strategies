@@ -12,7 +12,8 @@ class DualMAStrategy(bt.Strategy):
         ('max_drawdown', 0.15),   # 最大回撤限制
         ('price_limit', 0.10),    # 涨跌停限制(10%)
         ('enable_trailing_stop', False),  # 是否启用追踪止损
-        ('atr_multiplier', 1.0),  # ATR倍数
+        ('atr_loss_multiplier', 1.0),  # ATR倍数
+        ('atr_profit_multiplier', 1.0),  # ATR倍数
         ('atr_period', 14),       # ATR周期
         ('enable_death_cross', False),  # 是否启用死叉卖出信号
     )
@@ -46,6 +47,9 @@ class DualMAStrategy(bt.Strategy):
         self.slow_ma = bt.indicators.SMA(
             self.data.close, period=self.p.slow_period)
         self.crossover = bt.indicators.CrossOver(self.fast_ma, self.slow_ma)
+        
+        # 5日线趋势判断
+        self.ma5 = bt.indicators.SMA(self.data.close, period=5)
         
         # 追踪止损指标（根据参数决定是否启用）
         self.trailing_stop = None
@@ -159,7 +163,16 @@ class DualMAStrategy(bt.Strategy):
                 self.trailing_stop.next()
         
         if not self.position:  # 没有持仓
-            if self.crossover > 0:  # 金叉，买入信号
+            # 判断5日线趋势：当前值大于前一个值表示上升趋势
+            ma5_trend_up = self.ma5[0] > self.ma5[-1]
+            
+            # 判断是否收阴线
+            is_red_candle = self.data.close[0] < self.data.open[0]
+            
+            # 判断是否放巨量（量能比前一日大两倍）
+            volume_spike = self.data.volume[0] > self.data.volume[-1] * 2
+            
+            if self.crossover > 0 and ma5_trend_up and not is_red_candle and not volume_spike:  # 金叉且5日线趋势向上，且不是阴线，且不是巨量
                 shares = self.calculate_trade_size(current_price)
                 
                 if shares >= 100:  # 确保至少有100股
@@ -179,8 +192,8 @@ class DualMAStrategy(bt.Strategy):
                 
             # 计算ATR止盈止损价格
             current_atr = self.atr[0]
-            stop_loss = self.entry_price - (current_atr * self.p.atr_multiplier)
-            take_profit = self.entry_price + (current_atr * self.p.atr_multiplier)
+            stop_loss = self.entry_price - (current_atr * self.p.atr_loss_multiplier)
+            take_profit = self.entry_price + (current_atr * self.p.atr_profit_multiplier)
             
             # 获取追踪止损价格（如果启用）
             trailing_stop_price = None
