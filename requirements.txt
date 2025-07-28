@@ -1,3 +1,4 @@
+# 基础依赖
 akshare==1.16.95
 arch==7.2.0
 backtrader==1.9.78.123
@@ -6,14 +7,19 @@ gym==0.26.2
 joblib==1.5.1
 loguru==0.7.3
 matplotlib==3.10.3
-numpy==2.3.2
-pandas==2.3.1
+numpy==1.26.0  # 降级避免冲突
+pandas==2.1.0  # 兼容 akshare
 plotly==5.24.1
 ray==2.48.0
 Requests==2.32.4
-scikit_learn==1.7.1
+scikit-learn==1.7.1  # 注意包名是 scikit-learn，不是 scikit_learn
 seaborn==0.13.2
 stable_baselines3==2.7.0
 streamlit==1.47.1
-torch==2.7.1
+torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu  # 使用 CPU 版本
 tushare==1.4.21
+
+# TA-Lib 预编译 Wheel（Python 3.8/3.9 兼容）
+https://github.com/mrjbq7/ta-lib/releases/download/v0.4.24/TA_Lib-0.4.24-cp38-cp38-manylinux1_x86_64.whl  # Python 3.8
+# 或
+https://github.com/mrjbq7/ta-lib/releases/download/v0.4.24/TA_Lib-0.4.24-cp39-cp39-manylinux1_x86_64.whl  # Python 3.9
