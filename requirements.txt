@@ -17,4 +17,3 @@ stable_baselines3==2.7.0
 streamlit==1.47.1
 torch==2.7.1
 tushare==1.4.21
-streamlit==1.47.0
